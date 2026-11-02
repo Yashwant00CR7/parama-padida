@@ -15,11 +15,14 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.lifecycleScope
 import com.yashwant.paramapadida.data.repository.CourseRepository
+import com.yashwant.paramapadida.engine.KyotoStorageManager
 import com.yashwant.paramapadida.ui.course.CourseDetailScreen
 import com.yashwant.paramapadida.ui.home.HomeScreen
 import com.yashwant.paramapadida.ui.theme.DarkBackground
 import com.yashwant.paramapadida.ui.theme.ParamaPadidaTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -31,6 +34,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         repository = CourseRepository(applicationContext)
+
+        // Auto-migrate any previously downloaded videos to Kyoto Player directory
+        lifecycleScope.launch(Dispatchers.IO) {
+            KyotoStorageManager.migrateLegacyDownloads(applicationContext)
+        }
 
         var sharedUrl by mutableStateOf<String?>(null)
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {

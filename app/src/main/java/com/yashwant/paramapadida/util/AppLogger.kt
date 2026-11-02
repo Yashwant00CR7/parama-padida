@@ -181,6 +181,8 @@ object AppLogger {
             val freeMB = freeBytes / (1024 * 1024)
             sb.appendLine("Internal Free Space: $freeMB MB")
         } catch (_: Exception) {}
+        sb.appendLine("Kyoto Target Folder: ${com.yashwant.paramapadida.engine.KyotoStorageManager.getKyotoCourseFolder(context, "TestCourse").absolutePath}")
+        sb.appendLine("All Files Access Granted: ${com.yashwant.paramapadida.engine.KyotoStorageManager.hasAllFilesAccess()}")
         sb.appendLine()
 
         // 3. Kyoto Player Deep Inspection

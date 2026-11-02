@@ -30,6 +30,7 @@ import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.data.model.Lesson
 import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.engine.ExternalPlayerHelper
+import com.yashwant.paramapadida.engine.KyotoStorageManager
 import com.yashwant.paramapadida.ui.components.DebugLogsDialog
 import com.yashwant.paramapadida.ui.theme.*
 import com.yashwant.paramapadida.util.AppLogger
@@ -234,6 +235,15 @@ fun CourseDetailScreen(
                                     }
                                 }
                             )
+
+                            DropdownMenuItem(
+                                text = { Text("Kyoto Storage Permissions", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.FolderShared, contentDescription = null, tint = AccentBlue) },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    KyotoStorageManager.requestAllFilesAccess(context)
+                                }
+                            )
                         }
                     }
                 },
@@ -244,17 +254,68 @@ fun CourseDetailScreen(
         },
         containerColor = DarkBackground
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            var hasStorageAccess by remember { mutableStateOf(KyotoStorageManager.hasAllFilesAccess()) }
+            if (!hasStorageAccess) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = AccentBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Direct Kyoto Player Storage",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Allow storage access to place downloads directly in Kyoto Player's folder.",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Button(
+                            onClick = {
+                                KyotoStorageManager.requestAllFilesAccess(context)
+                                hasStorageAccess = KyotoStorageManager.hasAllFilesAccess()
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+                        ) {
+                            Text("Allow", fontSize = 11.sp, color = Color.White)
+                        }
+                    }
+                }
+            }
+
             // 5-Column Grid matching user's screenshot
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 80.dp)
@@ -538,6 +599,27 @@ fun LessonActionBottomSheet(
                 color = if (lesson.isWatched) AccentGreen else TextSecondary,
                 fontWeight = FontWeight.Medium
             )
+        }
+
+        if (lesson.isDownloaded && !lesson.localFilePath.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = TextMuted,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                val parentName = File(lesson.localFilePath).parentFile?.name ?: "Downloads"
+                Text(
+                    text = "Stored under Kyoto Player ($parentName)",
+                    fontSize = 11.sp,
+                    color = TextMuted
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))

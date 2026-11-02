@@ -223,6 +223,8 @@ class DownloadWorker(
                     DownloadStatus.DOWNLOADED,
                     100
                 )
+                // Register with system MediaScanner and mirror to Kyoto Player storage
+                com.yashwant.paramapadida.engine.KyotoStorageManager.registerAndSyncMedia(context, downloadedFile)
                 true
             } else {
                 val err = "File not found after download for index ${lesson.videoIndex} in ${courseFolder.absolutePath}"

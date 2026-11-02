@@ -46,6 +46,9 @@ interface LessonDao {
     suspend fun countWatchedLessons(courseId: String): Int
 
     // Batch & Sequential Download Queries
+    @Query("SELECT * FROM lessons WHERE downloadStatus = 'DOWNLOADED'")
+    suspend fun getAllDownloadedLessons(): List<Lesson>
+
     @Query("SELECT * FROM lessons WHERE downloadStatus = 'QUEUED' ORDER BY courseId ASC, videoIndex ASC LIMIT 1")
     suspend fun getNextQueuedLesson(): Lesson?
 

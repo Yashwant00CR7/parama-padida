@@ -107,6 +107,9 @@ object ExternalPlayerHelper {
         val kyotoPkg = findKyotoPackage(context)
         AppLogger.i("ExternalPlayerHelper", "Detected Kyoto Package: $kyotoPkg, URI: $uri, MIME: $mimeType")
 
+        // Ensure file is synced to Kyoto storage and registered with MediaStore
+        KyotoStorageManager.registerAndSyncMedia(context, file)
+
         if (kyotoPkg != null) {
             val pm = context.packageManager
 
@@ -117,12 +120,15 @@ object ExternalPlayerHelper {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra("title", lesson.title)
+                putExtra("path", file.absolutePath)
+                putExtra("file_path", file.absolutePath)
             }
             if (viewIntent.resolveActivity(pm) != null) {
                 return try {
                     context.grantUriPermission(kyotoPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     context.startActivity(viewIntent)
                     AppLogger.i("ExternalPlayerHelper", "Launched Kyoto Player via ACTION_VIEW ($kyotoPkg)")
+                    Toast.makeText(context, "Playing in Kyoto Player", Toast.LENGTH_SHORT).show()
                     lastLaunchError = null
                     true
                 } catch (e: Exception) {
@@ -131,7 +137,41 @@ object ExternalPlayerHelper {
                 }
             }
 
-            // Strategy 2: Launch via verified package launch intent with video extras
+            // Strategy 2: Explicit component launch for internal PlayerActivity if present
+            try {
+                val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.getPackageInfo(kyotoPkg, PackageManager.PackageInfoFlags.of(PackageManager.GET_ACTIVITIES.toLong()))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo(kyotoPkg, PackageManager.GET_ACTIVITIES)
+                }
+                val playerActivity = pkgInfo?.activities?.firstOrNull { act ->
+                    (act.name.contains("Player", ignoreCase = true) || act.name.contains("Video", ignoreCase = true)) &&
+                    !act.name.contains("MainActivity", ignoreCase = true)
+                }
+                if (playerActivity != null) {
+                    val compIntent = Intent(Intent.ACTION_VIEW).apply {
+                        setClassName(kyotoPkg, playerActivity.name)
+                        setDataAndType(uri, mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra("title", lesson.title)
+                        putExtra("path", file.absolutePath)
+                        putExtra("file_path", file.absolutePath)
+                        putExtra("url", uri.toString())
+                    }
+                    context.grantUriPermission(kyotoPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(compIntent)
+                    AppLogger.i("ExternalPlayerHelper", "Launched player activity ${playerActivity.name}")
+                    Toast.makeText(context, "Playing in Kyoto Player", Toast.LENGTH_SHORT).show()
+                    lastLaunchError = null
+                    return true
+                }
+            } catch (e: Exception) {
+                AppLogger.w("ExternalPlayerHelper", "Explicit component launch check skipped: ${e.message}")
+            }
+
+            // Strategy 3: Launch via verified package launch intent with video extras
             // DO NOT change launchIntent.action to ACTION_VIEW because launcher activities use ACTION_MAIN!
             val launchIntent = pm.getLaunchIntentForPackage(kyotoPkg)
             if (launchIntent != null) {
@@ -150,7 +190,7 @@ object ExternalPlayerHelper {
                     }
                     context.startActivity(launchIntent)
                     AppLogger.i("ExternalPlayerHelper", "Launched Kyoto Player via LaunchIntent ($kyotoPkg)")
-                    Toast.makeText(context, "Opened in Kyoto Player", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Opened Kyoto Player (video stored in Kyoto downloads)", Toast.LENGTH_LONG).show()
                     lastLaunchError = null
                     true
                 } catch (e: Exception) {
