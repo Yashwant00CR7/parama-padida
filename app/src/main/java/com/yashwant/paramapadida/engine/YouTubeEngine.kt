@@ -130,14 +130,13 @@ object YouTubeEngine {
     }
 
     /**
-     * Returns the standardized learning directory for a playlist
+     * Returns the standardized learning directory for a playlist.
+     * Uses context.getExternalFilesDir to guarantee 100% POSIX read/write access
+     * on all Android versions (Android 10 - 15+) without scoped storage EACCES errors.
      */
     fun getCourseFolder(context: Context, courseTitle: String): File {
         val sanitizedTitle = courseTitle.replace(Regex("[^a-zA-Z0-9._ -]"), "_").trim()
-        val baseDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-            ?: context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-            ?: context.filesDir
-
+        val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         val courseDir = File(baseDir, "ParamaPadida/$sanitizedTitle")
         if (!courseDir.exists()) {
             courseDir.mkdirs()

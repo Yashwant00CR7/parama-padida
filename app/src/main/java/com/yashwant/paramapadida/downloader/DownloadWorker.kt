@@ -67,21 +67,23 @@ class DownloadWorker(
 
         val courseFolder = YouTubeEngine.getCourseFolder(context, courseTitle)
         val sanitizedTitle = videoTitle.replace(Regex("[^a-zA-Z0-9._ -]"), "_").trim()
-        val filename = String.format("%02d - %s.mp4", videoIndex, sanitizedTitle)
-        val outputFile = File(courseFolder, filename)
+        val indexPrefix = String.format("%02d - ", videoIndex)
+        val outputTemplate = "${courseFolder.absolutePath}/$indexPrefix$sanitizedTitle.%(ext)s"
 
+        // YouTube streams: 'b' selects the best pre-muxed audio+video stream (e.g. 720p or 1080p HLS)
         val formatOption = when (quality) {
-            "720" -> "best[height<=720][ext=mp4]/best[ext=mp4]/best"
-            "1080" -> "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
-            "audio" -> "bestaudio[ext=m4a]/bestaudio"
-            else -> "best[ext=mp4]/best"
+            "720" -> "b[height<=720]/best[height<=720]/b/best"
+            "1080" -> "b[height<=1080]/best[height<=1080]/b/best"
+            "audio" -> "ba/bestaudio"
+            else -> "b/best"
         }
 
         return@withContext try {
             val request = YoutubeDLRequest(videoUrl).apply {
-                addOption("-o", outputFile.absolutePath)
+                addOption("-o", outputTemplate)
                 addOption("-f", formatOption)
                 addOption("--no-mtime")
+                addOption("--no-part")
                 addOption("--no-warnings")
             }
 
@@ -98,10 +100,15 @@ class DownloadWorker(
                 }
             }
 
-            if (outputFile.exists() && outputFile.length() > 0) {
+            // Find downloaded file matching the index prefix in the folder
+            val downloadedFile = courseFolder.listFiles()?.firstOrNull { file ->
+                file.name.startsWith(indexPrefix) && file.length() > 0 && !file.name.endsWith(".part") && !file.name.endsWith(".ytdl")
+            }
+
+            if (downloadedFile != null && downloadedFile.exists()) {
                 lessonDao.updateDownloadStatus(
                     lessonId,
-                    outputFile.absolutePath,
+                    downloadedFile.absolutePath,
                     DownloadStatus.DOWNLOADED,
                     100
                 )
@@ -111,15 +118,17 @@ class DownloadWorker(
                 )
                 Result.success()
             } else {
+                Log.e(TAG, "File not found after download for index $videoIndex in ${courseFolder.absolutePath}")
                 lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
                 Result.failure()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Download failed for $videoUrl", e)
+            val errorMsg = e.localizedMessage ?: "Unknown error"
+            Log.e(TAG, "Download failed for $videoUrl: $errorMsg", e)
             lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
             notificationManager.notify(
                 notificationId,
-                createNotification(videoTitle, 0, "Download failed: ${e.localizedMessage}")
+                createNotification(videoTitle, 0, "Download failed: $errorMsg")
             )
             Result.failure()
         }
