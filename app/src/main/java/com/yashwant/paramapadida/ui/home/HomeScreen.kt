@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.yashwant.paramapadida.data.model.Course
 import com.yashwant.paramapadida.data.repository.CourseRepository
+import com.yashwant.paramapadida.ui.components.DebugLogsDialog
 import com.yashwant.paramapadida.ui.theme.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -39,6 +40,7 @@ fun HomeScreen(
     val courses by repository.allCourses.collectAsState(initial = emptyList())
 
     var showImportDialog by remember { mutableStateOf(false) }
+    var showLogsDialog by remember { mutableStateOf(false) }
 
     val totalVideos = courses.sumOf { it.totalVideos }
     val watchedVideos = courses.sumOf { it.watchedVideos }
@@ -59,6 +61,15 @@ fun HomeScreen(
                             text = "Self-Paced Learning Hub",
                             fontSize = 12.sp,
                             color = TextSecondary
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showLogsDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = "Bug Logs & Diagnostics",
+                            tint = Color(0xFFFF5370)
                         )
                     }
                 },
@@ -228,6 +239,12 @@ fun HomeScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (showLogsDialog) {
+        DebugLogsDialog(
+            onDismissRequest = { showLogsDialog = false }
         )
     }
 }

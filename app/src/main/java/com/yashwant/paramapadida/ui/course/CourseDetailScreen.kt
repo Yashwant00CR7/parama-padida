@@ -30,7 +30,9 @@ import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.data.model.Lesson
 import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.engine.ExternalPlayerHelper
+import com.yashwant.paramapadida.ui.components.DebugLogsDialog
 import com.yashwant.paramapadida.ui.theme.*
+import com.yashwant.paramapadida.util.AppLogger
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -54,6 +56,9 @@ fun CourseDetailScreen(
 
     var selectedLessonForSheet by remember { mutableStateOf<Lesson?>(null) }
     var showOptionsMenu by remember { mutableStateOf(false) }
+    var showLogsDialog by remember { mutableStateOf(false) }
+    var activeLessonForLogs by remember { mutableStateOf<Lesson?>(null) }
+    var currentSheetError by remember { mutableStateOf<String?>(null) }
 
     val filteredLessons = remember(lessons, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -138,6 +143,18 @@ fun CourseDetailScreen(
                         )
                     }
 
+                    // Bug Logs & Diagnostics
+                    IconButton(onClick = {
+                        activeLessonForLogs = selectedLessonForSheet
+                        showLogsDialog = true
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = "Bug Logs & Diagnostics",
+                            tint = Color(0xFFFF5370)
+                        )
+                    }
+
                     // Overflow Menu
                     Box {
                         IconButton(onClick = { showOptionsMenu = true }) {
@@ -153,6 +170,15 @@ fun CourseDetailScreen(
                             onDismissRequest = { showOptionsMenu = false },
                             modifier = Modifier.background(DarkSurface)
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Bug Logs & Diagnostics", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.BugReport, contentDescription = null, tint = Color(0xFFFF5370)) },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    activeLessonForLogs = selectedLessonForSheet
+                                    showLogsDialog = true
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Download All Episodes", color = TextPrimary) },
                                 leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = AccentBlue) },
@@ -236,7 +262,10 @@ fun CourseDetailScreen(
     // Bottom Sheet matching the screenshot!
     selectedLessonForSheet?.let { lesson ->
         ModalBottomSheet(
-            onDismissRequest = { selectedLessonForSheet = null },
+            onDismissRequest = {
+                selectedLessonForSheet = null
+                currentSheetError = null
+            },
             containerColor = DarkSurface,
             contentColor = TextPrimary,
             dragHandle = {
@@ -253,9 +282,20 @@ fun CourseDetailScreen(
             LessonActionBottomSheet(
                 lesson = lesson,
                 courseTitle = course?.title ?: "Course",
-                onClose = { selectedLessonForSheet = null },
+                errorMessage = currentSheetError,
+                onClose = {
+                    selectedLessonForSheet = null
+                    currentSheetError = null
+                },
                 onPlayInKyotoPlayer = {
-                    ExternalPlayerHelper.playDownloadedLesson(context, lesson)
+                    currentSheetError = null
+                    ExternalPlayerHelper.playDownloadedLesson(context, lesson) { err ->
+                        currentSheetError = err
+                    }
+                },
+                onOpenLogs = {
+                    activeLessonForLogs = lesson
+                    showLogsDialog = true
                 },
                 onDownloadClick = {
                     coroutineScope.launch {
@@ -267,16 +307,25 @@ fun CourseDetailScreen(
                             Toast.makeText(context, "Download queued in background", Toast.LENGTH_SHORT).show()
                         }
                         selectedLessonForSheet = null
+                        currentSheetError = null
                     }
                 },
                 onToggleWatched = {
                     coroutineScope.launch {
                         repository.updateLessonWatchStatus(lesson.id, !lesson.isWatched, courseId)
                         selectedLessonForSheet = null
+                        currentSheetError = null
                     }
                 }
             )
         }
+    }
+
+    if (showLogsDialog) {
+        DebugLogsDialog(
+            onDismissRequest = { showLogsDialog = false },
+            currentLesson = activeLessonForLogs ?: selectedLessonForSheet
+        )
     }
 }
 
@@ -382,8 +431,10 @@ fun LessonGridTile(
 fun LessonActionBottomSheet(
     lesson: Lesson,
     courseTitle: String,
+    errorMessage: String? = null,
     onClose: () -> Unit,
     onPlayInKyotoPlayer: () -> Unit,
+    onOpenLogs: () -> Unit,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit
 ) {
@@ -505,6 +556,53 @@ fun LessonActionBottomSheet(
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
+            }
+        }
+
+        if (!errorMessage.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenLogs),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF2C1618)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B2635))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        tint = Color(0xFFFF5370),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Kyoto Player Issue",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = errorMessage,
+                            fontSize = 11.sp,
+                            color = Color(0xFFFFB4BC),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Copy Logs >",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentBlue
+                    )
+                }
             }
         }
 

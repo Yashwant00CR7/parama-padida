@@ -17,9 +17,27 @@
 
     <queries>
         <package android:name="com.kyotoplayer" />
+        <package android:name="com.kyoto.player" />
+        <package android:name="kyoto.player" />
+        <package android:name="org.videolan.vlc" />
+        <package android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="com.mxtech.videoplayer.pro" />
+        <package android:name="is.xyz.mpv" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/mp4" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="file" />
         </intent>
     </queries>
 

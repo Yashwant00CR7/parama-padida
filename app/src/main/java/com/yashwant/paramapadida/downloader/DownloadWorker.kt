@@ -17,6 +17,7 @@ import com.yashwant.paramapadida.R
 import com.yashwant.paramapadida.data.local.AppDatabase
 import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.engine.YouTubeEngine
+import com.yashwant.paramapadida.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -78,6 +79,8 @@ class DownloadWorker(
             else -> "b/best"
         }
 
+        AppLogger.i(TAG, "Starting download for ep #$videoIndex: '$videoTitle' ($videoUrl)")
+
         return@withContext try {
             val request = YoutubeDLRequest(videoUrl).apply {
                 addOption("-o", outputTemplate)
@@ -106,6 +109,7 @@ class DownloadWorker(
             }
 
             if (downloadedFile != null && downloadedFile.exists()) {
+                AppLogger.i(TAG, "Download succeeded: '${downloadedFile.name}' (${downloadedFile.length()} bytes)")
                 lessonDao.updateDownloadStatus(
                     lessonId,
                     downloadedFile.absolutePath,
@@ -118,13 +122,16 @@ class DownloadWorker(
                 )
                 Result.success()
             } else {
-                Log.e(TAG, "File not found after download for index $videoIndex in ${courseFolder.absolutePath}")
+                val err = "File not found after download for index $videoIndex in ${courseFolder.absolutePath}"
+                Log.e(TAG, err)
+                AppLogger.e(TAG, err)
                 lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
                 Result.failure()
             }
         } catch (e: Exception) {
             val errorMsg = e.localizedMessage ?: "Unknown error"
             Log.e(TAG, "Download failed for $videoUrl: $errorMsg", e)
+            AppLogger.e(TAG, "Download failed for $videoUrl: $errorMsg", e)
             lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
             notificationManager.notify(
                 notificationId,
