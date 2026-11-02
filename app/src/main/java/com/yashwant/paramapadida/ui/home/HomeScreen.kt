@@ -227,12 +227,8 @@ fun HomeScreen(
                         Toast.makeText(context, "Course '${course.title}' created!", Toast.LENGTH_SHORT).show()
 
                         if (downloadImmediately) {
-                            // Queue all lessons cleanly once
-                            val lessons = repository.getLessons(course.id).first()
-                            lessons.forEach { lesson ->
-                                repository.queueDownload(lesson, course.title)
-                            }
-                            Toast.makeText(context, "Queued ${lessons.size} episodes for download", Toast.LENGTH_SHORT).show()
+                            repository.queueCourseDownloads(course.id)
+                            Toast.makeText(context, "Queued all episodes for sequential batch download", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: Exception) {
                         Toast.makeText(context, "Error importing: ${e.localizedMessage}", Toast.LENGTH_LONG).show()

@@ -180,17 +180,27 @@ fun CourseDetailScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Download All Episodes", color = TextPrimary) },
+                                text = { Text("Download All (Sequential Batch)", color = TextPrimary) },
                                 leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = AccentBlue) },
                                 onClick = {
                                     showOptionsMenu = false
                                     course?.let { c ->
-                                        lessons.forEach { lesson ->
-                                            if (!lesson.isDownloaded) {
-                                                repository.queueDownload(lesson, c.title)
-                                            }
+                                        coroutineScope.launch {
+                                            repository.queueCourseDownloads(c.id)
+                                            Toast.makeText(context, "Queued all episodes for sequential batch download", Toast.LENGTH_SHORT).show()
                                         }
-                                        Toast.makeText(context, "Queued all downloads in background", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Pause / Cancel Downloads", color = Color(0xFFEF4444)) },
+                                leadingIcon = { Icon(Icons.Default.PauseCircle, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    coroutineScope.launch {
+                                        repository.cancelAllDownloads()
+                                        Toast.makeText(context, "Cancelled pending downloads", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )
@@ -303,8 +313,8 @@ fun CourseDetailScreen(
                             repository.deleteDownloadedVideo(lesson)
                             Toast.makeText(context, "Deleted downloaded file", Toast.LENGTH_SHORT).show()
                         } else {
-                            repository.queueDownload(lesson, course?.title ?: "Course")
-                            Toast.makeText(context, "Download queued in background", Toast.LENGTH_SHORT).show()
+                            repository.queueDownload(lesson)
+                            Toast.makeText(context, "Queued Ep #${lesson.videoIndex} for batch download", Toast.LENGTH_SHORT).show()
                         }
                         selectedLessonForSheet = null
                         currentSheetError = null
@@ -419,6 +429,16 @@ fun LessonGridTile(
                 strokeWidth = 2.dp,
                 color = AccentBlue
             )
+        } else if (lesson.downloadStatus == DownloadStatus.QUEUED) {
+            Icon(
+                imageVector = Icons.Default.Schedule,
+                contentDescription = "Queued in Batch",
+                tint = Color(0xFFF59E0B),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .size(12.dp)
+            )
         }
     }
 }
@@ -490,9 +510,17 @@ fun LessonActionBottomSheet(
             )
             Text(text = "•", fontSize = 12.sp, color = TextMuted)
             Text(
-                text = if (lesson.isDownloaded) "Downloaded & Ready" else "Not Downloaded",
+                text = when {
+                    lesson.isDownloaded -> "Downloaded & Ready"
+                    lesson.downloadStatus == DownloadStatus.DOWNLOADING -> "Downloading (${lesson.downloadProgress}%)"
+                    lesson.downloadStatus == DownloadStatus.QUEUED -> "Queued in Batch"
+                    else -> "Not Downloaded"
+                },
                 fontSize = 12.sp,
-                color = if (lesson.isDownloaded) AccentBlue else Color(0xFFF59E0B),
+                color = when {
+                    lesson.isDownloaded || lesson.downloadStatus == DownloadStatus.DOWNLOADING -> AccentBlue
+                    else -> Color(0xFFF59E0B)
+                },
                 fontWeight = FontWeight.Medium
             )
             Text(text = "•", fontSize = 12.sp, color = TextMuted)
@@ -552,7 +580,11 @@ fun LessonActionBottomSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (lesson.downloadStatus == DownloadStatus.DOWNLOADING) "Downloading..." else "Download Episode",
+                    text = when (lesson.downloadStatus) {
+                        DownloadStatus.DOWNLOADING -> "Downloading (${lesson.downloadProgress}%)..."
+                        DownloadStatus.QUEUED -> "Queued in Batch..."
+                        else -> "Download Episode"
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )

@@ -13,15 +13,20 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
-import com.yashwant.paramapadida.R
 import com.yashwant.paramapadida.data.local.AppDatabase
 import com.yashwant.paramapadida.data.model.DownloadStatus
+import com.yashwant.paramapadida.data.model.Lesson
 import com.yashwant.paramapadida.engine.YouTubeEngine
 import com.yashwant.paramapadida.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/**
+ * Sequential batch downloader.
+ * Ensures strictly ONE video downloads at a time to prevent high RAM/CPU spikes
+ * and memory-killer terminations on low-to-mid memory Android devices.
+ */
 class DownloadWorker(
     private val context: Context,
     params: WorkerParameters
@@ -29,13 +34,10 @@ class DownloadWorker(
 
     companion object {
         const val TAG = "DownloadWorker"
+        const val UNIQUE_WORK_NAME = "parama_batch_downloader"
         const val CHANNEL_ID = "parama_download_channel"
-        const val KEY_LESSON_ID = "key_lesson_id"
-        const val KEY_COURSE_ID = "key_course_id"
-        const val KEY_VIDEO_URL = "key_video_url"
-        const val KEY_VIDEO_INDEX = "key_video_index"
-        const val KEY_VIDEO_TITLE = "key_video_title"
-        const val KEY_COURSE_TITLE = "key_course_title"
+        const val NOTIFICATION_ID = 1001
+
         const val KEY_QUALITY = "key_quality" // e.g. "720", "1080", "best"
     }
 
@@ -43,51 +45,127 @@ class DownloadWorker(
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val lessonId = inputData.getString(KEY_LESSON_ID) ?: return@withContext Result.failure()
-        val courseId = inputData.getString(KEY_COURSE_ID) ?: return@withContext Result.failure()
-        val videoUrl = inputData.getString(KEY_VIDEO_URL) ?: return@withContext Result.failure()
-        val videoIndex = inputData.getInt(KEY_VIDEO_INDEX, 1)
-        val videoTitle = inputData.getString(KEY_VIDEO_TITLE) ?: "Lesson $videoIndex"
-        val courseTitle = inputData.getString(KEY_COURSE_TITLE) ?: "Course"
-        val quality = inputData.getString(KEY_QUALITY) ?: "best"
-
         val database = AppDatabase.getInstance(context)
         val lessonDao = database.lessonDao()
+        val courseDao = database.courseDao()
+        val quality = inputData.getString(KEY_QUALITY) ?: "720"
 
         createNotificationChannel()
 
-        val notificationId = lessonId.hashCode()
-        val initialNotification = createNotification(videoTitle, 0, "Starting download...")
+        // Set initial foreground notification
+        val initialNotification = createNotification(
+            title = "Download Queue Active",
+            progress = 0,
+            contentText = "Starting sequential batch download..."
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            setForeground(ForegroundInfo(notificationId, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
         } else {
-            setForeground(ForegroundInfo(notificationId, initialNotification))
+            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification))
         }
 
-        lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.DOWNLOADING, 0)
+        AppLogger.i(TAG, "Sequential download worker started")
+
+        var completedInSession = 0
+
+        try {
+            while (!isStopped) {
+                // Fetch the next queued item (ordered by courseId and videoIndex)
+                val lesson = lessonDao.getNextQueuedLesson()
+                if (lesson == null) {
+                    AppLogger.i(TAG, "No more items in queue. Batch finished.")
+                    break
+                }
+
+                val course = courseDao.getCourseByIdSync(lesson.courseId)
+                val courseTitle = course?.title ?: "Course"
+                val remainingQueue = lessonDao.countQueuedLessons()
+
+                AppLogger.i(TAG, "Processing ep #${lesson.videoIndex}: '${lesson.title}' ($remainingQueue remaining in queue)")
+
+                // Mark current lesson as DOWNLOADING
+                lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.DOWNLOADING, 0)
+
+                // Update notification for this episode
+                notificationManager.notify(
+                    NOTIFICATION_ID,
+                    createNotification(
+                        title = "Downloading: ${lesson.title}",
+                        progress = 0,
+                        contentText = "Ep #${lesson.videoIndex} • $remainingQueue left in queue"
+                    )
+                )
+
+                val success = downloadSingleLesson(lesson, courseTitle, quality, remainingQueue)
+                if (success) {
+                    completedInSession++
+                }
+
+                // Explicit garbage collection hint to release memory between video downloads
+                System.gc()
+            }
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Exception in sequential batch loop: ${e.message}", e)
+        }
+
+        if (isStopped) {
+            AppLogger.w(TAG, "Sequential download stopped / cancelled by user or system")
+            lessonDao.resetAllQueuedLessons()
+            notificationManager.notify(
+                NOTIFICATION_ID,
+                createNotification(
+                    title = "Downloads Paused",
+                    progress = 0,
+                    contentText = "Queue stopped"
+                )
+            )
+            return@withContext Result.failure()
+        }
+
+        notificationManager.notify(
+            NOTIFICATION_ID,
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setContentTitle("Downloads Complete")
+                .setContentText("Finished downloading $completedInSession episode(s)")
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setAutoCancel(true)
+                .setOngoing(false)
+                .build()
+        )
+
+        Result.success()
+    }
+
+    private suspend fun downloadSingleLesson(
+        lesson: Lesson,
+        courseTitle: String,
+        quality: String,
+        remainingInQueue: Int
+    ): Boolean {
+        val database = AppDatabase.getInstance(context)
+        val lessonDao = database.lessonDao()
 
         val courseFolder = YouTubeEngine.getCourseFolder(context, courseTitle)
-        val sanitizedTitle = videoTitle.replace(Regex("[^a-zA-Z0-9._ -]"), "_").trim()
-        val indexPrefix = String.format("%02d - ", videoIndex)
+        val sanitizedTitle = lesson.title.replace(Regex("[^a-zA-Z0-9._ -]"), "_").trim()
+        val indexPrefix = String.format("%02d - ", lesson.videoIndex)
         val outputTemplate = "${courseFolder.absolutePath}/$indexPrefix$sanitizedTitle.%(ext)s"
 
-        // YouTube streams: 'b' selects the best pre-muxed audio+video stream (e.g. 720p or 1080p HLS)
         val formatOption = when (quality) {
             "720" -> "b[height<=720]/best[height<=720]/b/best"
             "1080" -> "b[height<=1080]/best[height<=1080]/b/best"
             "audio" -> "ba/bestaudio"
-            else -> "b/best"
+            else -> "b[height<=720]/best[height<=720]/b/best"
         }
 
-        AppLogger.i(TAG, "Starting download for ep #$videoIndex: '$videoTitle' ($videoUrl)")
-
-        return@withContext try {
-            val request = YoutubeDLRequest(videoUrl).apply {
+        return try {
+            val request = YoutubeDLRequest(lesson.webUrl).apply {
                 addOption("-o", outputTemplate)
                 addOption("-f", formatOption)
                 addOption("--no-mtime")
                 addOption("--no-part")
                 addOption("--no-warnings")
+                addOption("--retries", "3")
+                addOption("--fragment-retries", "3")
             }
 
             var lastProgress = 0
@@ -96,10 +174,17 @@ class DownloadWorker(
                 if (intProgress != lastProgress) {
                     lastProgress = intProgress
                     notificationManager.notify(
-                        notificationId,
-                        createNotification(videoTitle, intProgress, "Downloading: $intProgress% (ETA: ${etaInSeconds}s)")
+                        NOTIFICATION_ID,
+                        createNotification(
+                            title = "Downloading: ${lesson.title}",
+                            progress = intProgress,
+                            contentText = "Ep #${lesson.videoIndex} ($intProgress% • ${remainingInQueue} left)"
+                        )
                     )
-                    setProgressAsync(workDataOf("progress" to intProgress))
+                    // Persist live progress to Room so the UI updates
+                    kotlinx.coroutines.runBlocking {
+                        lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.DOWNLOADING, intProgress)
+                    }
                 }
             }
 
@@ -109,35 +194,25 @@ class DownloadWorker(
             }
 
             if (downloadedFile != null && downloadedFile.exists()) {
-                AppLogger.i(TAG, "Download succeeded: '${downloadedFile.name}' (${downloadedFile.length()} bytes)")
+                AppLogger.i(TAG, "Ep #${lesson.videoIndex} download succeeded: '${downloadedFile.name}' (${downloadedFile.length()} bytes)")
                 lessonDao.updateDownloadStatus(
-                    lessonId,
+                    lesson.id,
                     downloadedFile.absolutePath,
                     DownloadStatus.DOWNLOADED,
                     100
                 )
-                notificationManager.notify(
-                    notificationId,
-                    createNotification(videoTitle, 100, "Download completed!")
-                )
-                Result.success()
+                true
             } else {
-                val err = "File not found after download for index $videoIndex in ${courseFolder.absolutePath}"
-                Log.e(TAG, err)
+                val err = "File not found after download for index ${lesson.videoIndex} in ${courseFolder.absolutePath}"
                 AppLogger.e(TAG, err)
-                lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
-                Result.failure()
+                lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.FAILED, 0)
+                false
             }
         } catch (e: Exception) {
             val errorMsg = e.localizedMessage ?: "Unknown error"
-            Log.e(TAG, "Download failed for $videoUrl: $errorMsg", e)
-            AppLogger.e(TAG, "Download failed for $videoUrl: $errorMsg", e)
-            lessonDao.updateDownloadStatus(lessonId, null, DownloadStatus.FAILED, 0)
-            notificationManager.notify(
-                notificationId,
-                createNotification(videoTitle, 0, "Download failed: $errorMsg")
-            )
-            Result.failure()
+            AppLogger.e(TAG, "Ep #${lesson.videoIndex} download failed: $errorMsg", e)
+            lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.FAILED, 0)
+            false
         }
     }
 
@@ -160,7 +235,7 @@ class DownloadWorker(
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, progress == 0)
-            .setOngoing(progress < 100)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()
 }

@@ -99,30 +99,45 @@ class CourseRepository(private val context: Context) {
         streamUrl
     }
 
-    fun queueDownload(lesson: Lesson, courseTitle: String, quality: String = "720") {
+    /**
+     * Enqueues a single lesson for sequential batch download.
+     */
+    suspend fun queueDownload(lesson: Lesson, quality: String = "720") = withContext(Dispatchers.IO) {
+        lessonDao.markLessonDownloadStatus(lesson.id, DownloadStatus.QUEUED)
+        startSequentialDownloader(quality)
+    }
+
+    /**
+     * Enqueues all un-downloaded lessons in a course for sequential batch download.
+     * Only 1 video will download at a time to keep RAM and CPU footprint minimal.
+     */
+    suspend fun queueCourseDownloads(courseId: String, quality: String = "720") = withContext(Dispatchers.IO) {
+        lessonDao.markCourseNonDownloadedAs(courseId, DownloadStatus.QUEUED)
+        startSequentialDownloader(quality)
+    }
+
+    /**
+     * Cancels any active download queue and resets remaining queued items.
+     */
+    suspend fun cancelAllDownloads() = withContext(Dispatchers.IO) {
+        workManager.cancelUniqueWork(DownloadWorker.UNIQUE_WORK_NAME)
+        lessonDao.resetAllQueuedLessons()
+    }
+
+    private fun startSequentialDownloader(quality: String = "720") {
         val workRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    DownloadWorker.KEY_LESSON_ID to lesson.id,
-                    DownloadWorker.KEY_COURSE_ID to lesson.courseId,
-                    DownloadWorker.KEY_VIDEO_URL to lesson.webUrl,
-                    DownloadWorker.KEY_VIDEO_INDEX to lesson.videoIndex,
-                    DownloadWorker.KEY_VIDEO_TITLE to lesson.title,
-                    DownloadWorker.KEY_COURSE_TITLE to courseTitle,
-                    DownloadWorker.KEY_QUALITY to quality
-                )
-            )
+            .setInputData(workDataOf(DownloadWorker.KEY_QUALITY to quality))
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
-            .addTag("download_${lesson.id}")
+            .addTag("sequential_batch_download")
             .build()
 
         workManager.enqueueUniqueWork(
-            "download_${lesson.id}",
-            ExistingWorkPolicy.REPLACE,
+            DownloadWorker.UNIQUE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
             workRequest
         )
     }
