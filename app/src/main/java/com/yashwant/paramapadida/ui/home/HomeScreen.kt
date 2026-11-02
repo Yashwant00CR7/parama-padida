@@ -25,6 +25,7 @@ import coil.compose.AsyncImage
 import com.yashwant.paramapadida.data.model.Course
 import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.ui.theme.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -215,12 +216,12 @@ fun HomeScreen(
                         Toast.makeText(context, "Course '${course.title}' created!", Toast.LENGTH_SHORT).show()
 
                         if (downloadImmediately) {
-                            // Queue all lessons
-                            repository.getLessons(course.id).collect { lessons ->
-                                lessons.forEach { lesson ->
-                                    repository.queueDownload(lesson, course.title)
-                                }
+                            // Queue all lessons cleanly once
+                            val lessons = repository.getLessons(course.id).first()
+                            lessons.forEach { lesson ->
+                                repository.queueDownload(lesson, course.title)
                             }
+                            Toast.makeText(context, "Queued ${lessons.size} episodes for download", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: Exception) {
                         Toast.makeText(context, "Error importing: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
@@ -353,7 +354,7 @@ fun ImportPlaylistDialog(
 ) {
     var playlistUrl by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("Coding") }
-    var downloadAll by remember { mutableStateOf(false) }
+    var downloadAll by remember { mutableStateOf(true) }
     var isLoading by remember { mutableStateOf(false) }
 
     AlertDialog(

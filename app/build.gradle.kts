@@ -76,11 +76,6 @@ dependencies {
 
     implementation("androidx.navigation:navigation-compose:2.8.3")
 
-    // Media3 (ExoPlayer)
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-ui:1.4.1")
-    implementation("androidx.media3:media3-common:1.4.1")
-
     // Room Database
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

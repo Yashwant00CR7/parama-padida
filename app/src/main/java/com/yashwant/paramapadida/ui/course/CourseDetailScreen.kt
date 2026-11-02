@@ -1,7 +1,5 @@
 package com.yashwant.paramapadida.ui.course
 
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,8 +39,7 @@ import java.io.File
 fun CourseDetailScreen(
     courseId: String,
     repository: CourseRepository,
-    onBackClick: () -> Unit,
-    onPlayInApp: (String) -> Unit
+    onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -71,6 +68,7 @@ fun CourseDetailScreen(
 
     val totalCount = course?.totalVideos ?: lessons.size
     val watchedCount = lessons.count { it.isWatched }
+    val downloadedCount = lessons.count { it.isDownloaded }
     val progressPercent = if (totalCount > 0) (watchedCount.toFloat() / totalCount.toFloat() * 100).toInt() else 0
 
     Scaffold(
@@ -111,7 +109,7 @@ fun CourseDetailScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Episodes ($watchedCount/$totalCount watched • $progressPercent%)",
+                                text = "Episodes ($watchedCount/$totalCount watched • $downloadedCount downloaded)",
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
@@ -195,7 +193,7 @@ fun CourseDetailScreen(
                                         if (folder.exists()) {
                                             Toast.makeText(context, "Folder: ${c.folderPath}", Toast.LENGTH_LONG).show()
                                         } else {
-                                            Toast.makeText(context, "Folder will be created when downloading", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Folder created when downloading", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -215,7 +213,7 @@ fun CourseDetailScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 5-Column Grid exactly matching the user's screenshot!
+            // 5-Column Grid matching user's screenshot
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier
@@ -256,30 +254,17 @@ fun CourseDetailScreen(
                 lesson = lesson,
                 courseTitle = course?.title ?: "Course",
                 onClose = { selectedLessonForSheet = null },
-                onPlayInApp = {
-                    val lessonId = lesson.id
-                    selectedLessonForSheet = null
-                    onPlayInApp(lessonId)
-                },
-                onOpenKyotoPlayer = {
-                    coroutineScope.launch {
-                        val streamUrl = if (lesson.isDownloaded) null else repository.resolveStreamUrl(lesson)
-                        ExternalPlayerHelper.openInKyotoPlayer(
-                            context = context,
-                            title = lesson.title,
-                            localFilePath = lesson.localFilePath,
-                            streamUrl = streamUrl ?: lesson.directStreamUrl ?: lesson.webUrl
-                        )
-                    }
+                onPlayInKyotoPlayer = {
+                    ExternalPlayerHelper.playDownloadedLesson(context, lesson)
                 },
                 onDownloadClick = {
                     coroutineScope.launch {
                         if (lesson.isDownloaded) {
                             repository.deleteDownloadedVideo(lesson)
-                            Toast.makeText(context, "Deleted local video", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Deleted downloaded file", Toast.LENGTH_SHORT).show()
                         } else {
                             repository.queueDownload(lesson, course?.title ?: "Course")
-                            Toast.makeText(context, "Download started in background", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Download queued in background", Toast.LENGTH_SHORT).show()
                         }
                         selectedLessonForSheet = null
                     }
@@ -305,9 +290,19 @@ fun LessonGridTile(
 ) {
     val isWatched = lesson.isWatched
     val isDownloaded = lesson.isDownloaded
+    val isDownloading = lesson.downloadStatus == DownloadStatus.DOWNLOADING
 
-    val cardBg = if (isWatched) Color(0xFF1B2A1E) else Color(0xFF1A1A1A)
-    val borderColor = if (isWatched) AccentGreen else Color(0xFF282828)
+    val cardBg = when {
+        isWatched -> Color(0xFF1B2A1E)
+        isDownloaded -> Color(0xFF1C2430)
+        else -> Color(0xFF1A1A1A)
+    }
+
+    val borderColor = when {
+        isWatched -> AccentGreen
+        isDownloaded -> AccentBlue
+        else -> Color(0xFF282828)
+    }
 
     Box(
         modifier = Modifier
@@ -315,7 +310,7 @@ fun LessonGridTile(
             .clip(RoundedCornerShape(8.dp))
             .background(cardBg)
             .border(
-                width = if (isWatched) 1.5.dp else 1.dp,
+                width = if (isWatched || isDownloaded) 1.5.dp else 1.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(8.dp)
             )
@@ -327,7 +322,11 @@ fun LessonGridTile(
             text = lesson.videoIndex.toString(),
             fontSize = 17.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (isWatched) AccentGreen else TextPrimary,
+            color = when {
+                isWatched -> AccentGreen
+                isDownloaded -> Color.White
+                else -> TextPrimary
+            },
             textAlign = TextAlign.Center
         )
 
@@ -351,7 +350,7 @@ fun LessonGridTile(
             }
         }
 
-        // Offline / Downloaded icon in bottom right corner
+        // Offline / Downloaded badge in bottom right corner
         if (isDownloaded) {
             Icon(
                 imageVector = Icons.Default.DownloadDone,
@@ -362,7 +361,7 @@ fun LessonGridTile(
                     .padding(4.dp)
                     .size(14.dp)
             )
-        } else if (lesson.downloadStatus == DownloadStatus.DOWNLOADING) {
+        } else if (isDownloading) {
             CircularProgressIndicator(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -377,14 +376,14 @@ fun LessonGridTile(
 
 /**
  * Bottom sheet matching the design in user's screenshot
+ * (Now streamlined: exclusively Download + Kyoto Player playback!)
  */
 @Composable
 fun LessonActionBottomSheet(
     lesson: Lesson,
     courseTitle: String,
     onClose: () -> Unit,
-    onPlayInApp: () -> Unit,
-    onOpenKyotoPlayer: () -> Unit,
+    onPlayInKyotoPlayer: () -> Unit,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit
 ) {
@@ -440,36 +439,31 @@ fun LessonActionBottomSheet(
             )
             Text(text = "•", fontSize = 12.sp, color = TextMuted)
             Text(
-                text = if (lesson.isWatched) "Completed" else "Not Watched",
+                text = if (lesson.isDownloaded) "Downloaded & Ready" else "Not Downloaded",
+                fontSize = 12.sp,
+                color = if (lesson.isDownloaded) AccentBlue else Color(0xFFF59E0B),
+                fontWeight = FontWeight.Medium
+            )
+            Text(text = "•", fontSize = 12.sp, color = TextMuted)
+            Text(
+                text = if (lesson.isWatched) "Watched" else "Unwatched",
                 fontSize = 12.sp,
                 color = if (lesson.isWatched) AccentGreen else TextSecondary,
                 fontWeight = FontWeight.Medium
             )
-            if (lesson.isDownloaded) {
-                Text(text = "•", fontSize = 12.sp, color = TextMuted)
-                Text(
-                    text = "Offline Available",
-                    fontSize = 12.sp,
-                    color = AccentBlue,
-                    fontWeight = FontWeight.Medium
-                )
-            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Action Buttons arranged in 2 columns (matching pill buttons in the screenshot!)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Built-in Player Button (White pill in screenshot)
+        // Action Buttons arranged in pill rows matching the screenshot
+        if (lesson.isDownloaded) {
+            // Big White Pill button: Play in Kyoto Player!
             Button(
-                onClick = onPlayInApp,
+                onClick = onPlayInKyotoPlayer,
                 modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp),
-                shape = RoundedCornerShape(26.dp),
+                    .fillMaxWidth()
+                    .height(54.dp),
+                shape = RoundedCornerShape(27.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.White,
                     contentColor = Color.Black
@@ -478,38 +472,38 @@ fun LessonActionBottomSheet(
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = null,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(24.dp)
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "In-App Player",
+                    text = "Play in Kyoto Player",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
+                    fontSize = 16.sp
                 )
             }
-
-            // Kyoto Player Button (White pill in screenshot)
+        } else {
+            // Big Blue Pill button: Download Episode!
             Button(
-                onClick = onOpenKyotoPlayer,
+                onClick = onDownloadClick,
                 modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp),
-                shape = RoundedCornerShape(26.dp),
+                    .fillMaxWidth()
+                    .height(54.dp),
+                shape = RoundedCornerShape(27.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black
+                    containerColor = AccentBlue,
+                    contentColor = Color.White
                 )
             ) {
                 Icon(
-                    imageVector = Icons.Default.Launch,
+                    imageVector = Icons.Default.Download,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(22.dp)
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Kyoto Player",
+                    text = if (lesson.downloadStatus == DownloadStatus.DOWNLOADING) "Downloading..." else "Download Episode",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
+                    fontSize = 15.sp
                 )
             }
         }
@@ -520,35 +514,7 @@ fun LessonActionBottomSheet(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Download / Delete Download Action Button
-            OutlinedButton(
-                onClick = onDownloadClick,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (lesson.isDownloaded) Color(0xFFEF4444) else AccentBlue
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (lesson.isDownloaded) Color(0xFFEF4444) else AccentBlue
-                )
-            ) {
-                Icon(
-                    imageVector = if (lesson.isDownloaded) Icons.Default.Delete else Icons.Default.Download,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (lesson.isDownloaded) "Delete Video" else "Download",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp
-                )
-            }
-
-            // Mark as Watched Toggle
+            // Toggle Watched Button
             OutlinedButton(
                 onClick = onToggleWatched,
                 modifier = Modifier
@@ -574,6 +540,33 @@ fun LessonActionBottomSheet(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp
                 )
+            }
+
+            if (lesson.isDownloaded) {
+                // Delete Download Button
+                OutlinedButton(
+                    onClick = onDownloadClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFFEF4444)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Delete File",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
             }
         }
     }

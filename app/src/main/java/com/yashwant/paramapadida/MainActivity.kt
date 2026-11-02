@@ -18,7 +18,6 @@ import androidx.navigation.navArgument
 import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.ui.course.CourseDetailScreen
 import com.yashwant.paramapadida.ui.home.HomeScreen
-import com.yashwant.paramapadida.ui.player.VideoPlayerScreen
 import com.yashwant.paramapadida.ui.theme.DarkBackground
 import com.yashwant.paramapadida.ui.theme.ParamaPadidaTheme
 import kotlinx.coroutines.launch
@@ -84,21 +83,6 @@ class MainActivity : ComponentActivity() {
                             val courseId = backStackEntry.arguments?.getString("courseId") ?: ""
                             CourseDetailScreen(
                                 courseId = courseId,
-                                repository = repository,
-                                onBackClick = { navController.popBackStack() },
-                                onPlayInApp = { lessonId ->
-                                    navController.navigate("player/$lessonId")
-                                }
-                            )
-                        }
-
-                        composable(
-                            route = "player/{lessonId}",
-                            arguments = listOf(navArgument("lessonId") { type = NavType.StringType })
-                        ) { backStackEntry ->
-                            val lessonId = backStackEntry.arguments?.getString("lessonId") ?: ""
-                            VideoPlayerScreen(
-                                lessonId = lessonId,
                                 repository = repository,
                                 onBackClick = { navController.popBackStack() }
                             )
