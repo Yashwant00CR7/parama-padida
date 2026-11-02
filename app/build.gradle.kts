@@ -92,9 +92,8 @@ dependencies {
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
-    // YouTubeDL Android (yt-dlp + ffmpeg)
+    // YouTubeDL Android (yt-dlp)
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 
     // Utilities
     implementation("com.google.code.gson:gson:2.11.0")

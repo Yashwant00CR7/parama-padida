@@ -71,10 +71,10 @@ class DownloadWorker(
         val outputFile = File(courseFolder, filename)
 
         val formatOption = when (quality) {
-            "720" -> "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
-            "1080" -> "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
+            "720" -> "best[height<=720][ext=mp4]/best[ext=mp4]/best"
+            "1080" -> "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
             "audio" -> "bestaudio[ext=m4a]/bestaudio"
-            else -> "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            else -> "best[ext=mp4]/best"
         }
 
         return@withContext try {
