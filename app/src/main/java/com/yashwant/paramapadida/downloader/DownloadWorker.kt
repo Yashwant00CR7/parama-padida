@@ -18,7 +18,9 @@ import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.data.model.Lesson
 import com.yashwant.paramapadida.engine.YouTubeEngine
 import com.yashwant.paramapadida.util.AppLogger
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -44,6 +46,20 @@ class DownloadWorker(
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        createNotificationChannel()
+        val notification = createNotification(
+            title = "Video Downloads",
+            progress = 0,
+            contentText = "Processing download queue..."
+        )
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val database = AppDatabase.getInstance(context)
         val lessonDao = database.lessonDao()
@@ -52,19 +68,20 @@ class DownloadWorker(
 
         createNotificationChannel()
 
-        // Set initial foreground notification
-        val initialNotification = createNotification(
-            title = "Download Queue Active",
-            progress = 0,
-            contentText = "Starting sequential batch download..."
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
-        } else {
-            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification))
+        try {
+            setForeground(getForegroundInfo())
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "setForeground warning: ${e.message}")
         }
 
-        AppLogger.i(TAG, "Sequential download worker started")
+        AppLogger.i(TAG, "Sequential download worker active")
+
+        // Reset any leftover DOWNLOADING tasks from prior crashed runs back to QUEUED
+        try {
+            lessonDao.resetInterruptedDownloads()
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "Reset interrupted downloads: ${e.message}")
+        }
 
         var completedInSession = 0
 
@@ -81,7 +98,7 @@ class DownloadWorker(
                 val courseTitle = course?.title ?: "Course"
                 val remainingQueue = lessonDao.countQueuedLessons()
 
-                AppLogger.i(TAG, "Processing ep #${lesson.videoIndex}: '${lesson.title}' ($remainingQueue remaining in queue)")
+                AppLogger.i(TAG, "Starting download for Ep #${lesson.videoIndex}: '${lesson.title}' ($remainingQueue queued)")
 
                 // Mark current lesson as DOWNLOADING
                 lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.DOWNLOADING, 0)
@@ -92,7 +109,7 @@ class DownloadWorker(
                     createNotification(
                         title = "Downloading: ${lesson.title}",
                         progress = 0,
-                        contentText = "Ep #${lesson.videoIndex} • $remainingQueue left in queue"
+                        contentText = "Ep #${lesson.videoIndex} • $remainingQueue in queue"
                     )
                 )
 
@@ -109,7 +126,7 @@ class DownloadWorker(
         }
 
         if (isStopped) {
-            AppLogger.w(TAG, "Sequential download stopped / cancelled by user or system")
+            AppLogger.w(TAG, "Sequential download stopped / cancelled")
             lessonDao.resetAllQueuedLessons()
             notificationManager.notify(
                 NOTIFICATION_ID,
@@ -150,11 +167,12 @@ class DownloadWorker(
         val indexPrefix = String.format("%02d - ", lesson.videoIndex)
         val outputTemplate = "${courseFolder.absolutePath}/$indexPrefix$sanitizedTitle.%(ext)s"
 
+        // YouTube formats: b selects combined pre-muxed stream; 22 (720p), 18 (360p) are universal MP4 fallbacks
         val formatOption = when (quality) {
-            "720" -> "b[height<=720]/best[height<=720]/b/best"
-            "1080" -> "b[height<=1080]/best[height<=1080]/b/best"
+            "720" -> "b[height<=720]/best[height<=720]/b/best/22/18/w"
+            "1080" -> "b[height<=1080]/best[height<=1080]/b/best/22/18/w"
             "audio" -> "ba/bestaudio"
-            else -> "b[height<=720]/best[height<=720]/b/best"
+            else -> "b[height<=720]/best[height<=720]/b/best/22/18/w"
         }
 
         return try {
@@ -168,22 +186,26 @@ class DownloadWorker(
                 addOption("--fragment-retries", "3")
             }
 
-            var lastProgress = 0
+            var lastReportedProgress = 0
+            val bgScope = CoroutineScope(Dispatchers.IO)
+
             YoutubeDL.getInstance().execute(request) { progress, etaInSeconds, _ ->
                 val intProgress = progress.toInt().coerceIn(0, 100)
-                if (intProgress != lastProgress) {
-                    lastProgress = intProgress
+                if (intProgress - lastReportedProgress >= 10 || (intProgress == 100 && lastReportedProgress != 100)) {
+                    lastReportedProgress = intProgress
                     notificationManager.notify(
                         NOTIFICATION_ID,
                         createNotification(
                             title = "Downloading: ${lesson.title}",
                             progress = intProgress,
-                            contentText = "Ep #${lesson.videoIndex} ($intProgress% • ${remainingInQueue} left)"
+                            contentText = "Ep #${lesson.videoIndex} ($intProgress% • $remainingInQueue in queue)"
                         )
                     )
-                    // Persist live progress to Room so the UI updates
-                    kotlinx.coroutines.runBlocking {
-                        lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.DOWNLOADING, intProgress)
+                    // Asynchronously persist progress in Room without blocking the native Python thread
+                    bgScope.launch {
+                        try {
+                            lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.DOWNLOADING, intProgress)
+                        } catch (_: Exception) {}
                     }
                 }
             }

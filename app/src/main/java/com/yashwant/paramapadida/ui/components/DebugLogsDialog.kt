@@ -43,7 +43,8 @@ fun DebugLogsDialog(
     val listState = rememberLazyListState()
     var copyBannerText by remember { mutableStateOf<String?>(null) }
 
-    val isKyotoInstalled = remember { ExternalPlayerHelper.isKyotoPlayerInstalled(context) }
+    val kyotoPkg = remember { ExternalPlayerHelper.findKyotoPackage(context) }
+    val isKyotoInstalled = kyotoPkg != null
 
     // Auto-scroll to latest log entry
     LaunchedEffect(logs.size) {
@@ -143,7 +144,7 @@ fun DebugLogsDialog(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isKyotoInstalled) "Kyoto: Installed" else "Kyoto: Not Found",
+                            text = if (kyotoPkg != null) "Kyoto: $kyotoPkg" else "Kyoto: Not Detected",
                             fontSize = 11.sp,
                             color = TextPrimary
                         )

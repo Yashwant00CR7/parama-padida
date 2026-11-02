@@ -303,6 +303,13 @@ fun CourseDetailScreen(
                         currentSheetError = err
                     }
                 },
+                onPlayInSystemChooser = {
+                    currentSheetError = null
+                    val success = ExternalPlayerHelper.playWithSystemChooser(context, lesson)
+                    if (!success) {
+                        currentSheetError = "No external video player installed on device."
+                    }
+                },
                 onOpenLogs = {
                     activeLessonForLogs = lesson
                     showLogsDialog = true
@@ -454,6 +461,7 @@ fun LessonActionBottomSheet(
     errorMessage: String? = null,
     onClose: () -> Unit,
     onPlayInKyotoPlayer: () -> Unit,
+    onPlayInSystemChooser: () -> Unit,
     onOpenLogs: () -> Unit,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit
@@ -541,8 +549,8 @@ fun LessonActionBottomSheet(
                 onClick = onPlayInKyotoPlayer,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(27.dp),
+                    .height(52.dp),
+                shape = RoundedCornerShape(26.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.White,
                     contentColor = Color.Black
@@ -557,7 +565,36 @@ fun LessonActionBottomSheet(
                 Text(
                     text = "Play in Kyoto Player",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontSize = 15.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Secondary Outlined Pill: Open in Other Video Player
+            OutlinedButton(
+                onClick = onPlayInSystemChooser,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                shape = RoundedCornerShape(22.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = TextPrimary
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E3E3E))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = TextSecondary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Open in Other Video Player",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = TextSecondary
                 )
             }
         } else {

@@ -186,7 +186,7 @@ object AppLogger {
         // 3. Kyoto Player Deep Inspection
         sb.appendLine("--- KYOTO PLAYER INSPECTION ---")
         val pm = context.packageManager
-        val targetPackage = "com.kyotoplayer"
+        val targetPackage = com.yashwant.paramapadida.engine.ExternalPlayerHelper.findKyotoPackage(context) ?: "com.kyotoplayer"
         try {
             val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.getPackageInfo(targetPackage, PackageManager.PackageInfoFlags.of(PackageManager.GET_ACTIVITIES.toLong()))

@@ -137,7 +137,7 @@ class CourseRepository(private val context: Context) {
 
         workManager.enqueueUniqueWork(
             DownloadWorker.UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             workRequest
         )
     }

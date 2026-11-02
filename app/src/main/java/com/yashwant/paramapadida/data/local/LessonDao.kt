@@ -46,7 +46,7 @@ interface LessonDao {
     suspend fun countWatchedLessons(courseId: String): Int
 
     // Batch & Sequential Download Queries
-    @Query("SELECT * FROM lessons WHERE downloadStatus IN ('QUEUED', 'DOWNLOADING') ORDER BY courseId ASC, videoIndex ASC LIMIT 1")
+    @Query("SELECT * FROM lessons WHERE downloadStatus = 'QUEUED' ORDER BY courseId ASC, videoIndex ASC LIMIT 1")
     suspend fun getNextQueuedLesson(): Lesson?
 
     @Query("SELECT COUNT(*) FROM lessons WHERE downloadStatus IN ('QUEUED', 'DOWNLOADING')")
@@ -60,6 +60,9 @@ interface LessonDao {
 
     @Query("UPDATE lessons SET downloadStatus = :status, downloadProgress = 0 WHERE id = :lessonId AND downloadStatus != 'DOWNLOADED'")
     suspend fun markLessonDownloadStatus(lessonId: String, status: DownloadStatus)
+
+    @Query("UPDATE lessons SET downloadStatus = 'QUEUED' WHERE downloadStatus = 'DOWNLOADING'")
+    suspend fun resetInterruptedDownloads()
 
     @Query("UPDATE lessons SET downloadStatus = 'NOT_DOWNLOADED', downloadProgress = 0 WHERE downloadStatus IN ('QUEUED', 'DOWNLOADING')")
     suspend fun resetAllQueuedLessons()
