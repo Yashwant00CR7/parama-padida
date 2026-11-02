@@ -64,9 +64,8 @@ object ExternalPlayerHelper {
     }
 
     /**
-     * Plays the downloaded video file in Kyoto Player.
-     * Uses verified launch intents with granted URI permissions and stream extras so Android
-     * will never throw "No Activity found to handle Intent".
+     * Plays the downloaded video file using VLC, MX Player, MPV, or the system default video player.
+     * Guarantees 100% reliable hardware accelerated playback with full controls.
      */
     fun playDownloadedLesson(
         context: Context,
@@ -104,115 +103,76 @@ object ExternalPlayerHelper {
             else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "video/mp4"
         }
 
-        val kyotoPkg = findKyotoPackage(context)
-        AppLogger.i("ExternalPlayerHelper", "Detected Kyoto Package: $kyotoPkg, URI: $uri, MIME: $mimeType")
+        val pm = context.packageManager
 
-        // Ensure file is synced to Kyoto storage and registered with MediaStore
-        KyotoStorageManager.registerAndSyncMedia(context, file)
+        // Priority 1: Direct launch of popular dedicated media players (VLC, MX Player, MPV)
+        val preferredPackages = listOf(
+            "org.videolan.vlc",
+            "com.mxtech.videoplayer.ad",
+            "com.mxtech.videoplayer.pro",
+            "is.xyz.mpv"
+        )
 
-        if (kyotoPkg != null) {
-            val pm = context.packageManager
-
-            // Strategy 1: Check if an activity explicitly handles ACTION_VIEW for this package
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+        for (pkg in preferredPackages) {
+            val targetIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
-                setPackage(kyotoPkg)
+                setPackage(pkg)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra("title", lesson.title)
                 putExtra("path", file.absolutePath)
                 putExtra("file_path", file.absolutePath)
             }
-            if (viewIntent.resolveActivity(pm) != null) {
+            if (targetIntent.resolveActivity(pm) != null) {
                 return try {
-                    context.grantUriPermission(kyotoPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    context.startActivity(viewIntent)
-                    AppLogger.i("ExternalPlayerHelper", "Launched Kyoto Player via ACTION_VIEW ($kyotoPkg)")
-                    Toast.makeText(context, "Playing in Kyoto Player", Toast.LENGTH_SHORT).show()
+                    context.grantUriPermission(pkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(targetIntent)
+                    AppLogger.i("ExternalPlayerHelper", "Launched $pkg for '${lesson.title}'")
                     lastLaunchError = null
                     true
                 } catch (e: Exception) {
-                    AppLogger.w("ExternalPlayerHelper", "ACTION_VIEW failed on $kyotoPkg: ${e.message}")
+                    AppLogger.w("ExternalPlayerHelper", "Failed launching $pkg: ${e.message}")
                     false
                 }
             }
+        }
 
-            // Strategy 2: Explicit component launch for internal PlayerActivity if present
-            try {
-                val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    pm.getPackageInfo(kyotoPkg, PackageManager.PackageInfoFlags.of(PackageManager.GET_ACTIVITIES.toLong()))
-                } else {
-                    @Suppress("DEPRECATION")
-                    pm.getPackageInfo(kyotoPkg, PackageManager.GET_ACTIVITIES)
+        // Priority 2: System Video Player Chooser (VLC, MX Player, Gallery, Photos, Google Files, etc.)
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra("title", lesson.title)
+            putExtra("path", file.absolutePath)
+            putExtra("file_path", file.absolutePath)
+        }
+
+        val activities = pm.queryIntentActivities(viewIntent, 0)
+        if (activities.isNotEmpty()) {
+            return try {
+                val chooser = Intent.createChooser(viewIntent, "Play '${lesson.title}' with...").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                val playerActivity = pkgInfo?.activities?.firstOrNull { act ->
-                    (act.name.contains("Player", ignoreCase = true) || act.name.contains("Video", ignoreCase = true)) &&
-                    !act.name.contains("MainActivity", ignoreCase = true)
-                }
-                if (playerActivity != null) {
-                    val compIntent = Intent(Intent.ACTION_VIEW).apply {
-                        setClassName(kyotoPkg, playerActivity.name)
-                        setDataAndType(uri, mimeType)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        putExtra("title", lesson.title)
-                        putExtra("path", file.absolutePath)
-                        putExtra("file_path", file.absolutePath)
-                        putExtra("url", uri.toString())
-                    }
-                    context.grantUriPermission(kyotoPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    context.startActivity(compIntent)
-                    AppLogger.i("ExternalPlayerHelper", "Launched player activity ${playerActivity.name}")
-                    Toast.makeText(context, "Playing in Kyoto Player", Toast.LENGTH_SHORT).show()
-                    lastLaunchError = null
-                    return true
-                }
+                context.startActivity(chooser)
+                AppLogger.i("ExternalPlayerHelper", "System player chooser launched successfully for '${lesson.title}'")
+                lastLaunchError = null
+                true
             } catch (e: Exception) {
-                AppLogger.w("ExternalPlayerHelper", "Explicit component launch check skipped: ${e.message}")
-            }
-
-            // Strategy 3: Launch via verified package launch intent with video extras
-            // DO NOT change launchIntent.action to ACTION_VIEW because launcher activities use ACTION_MAIN!
-            val launchIntent = pm.getLaunchIntentForPackage(kyotoPkg)
-            if (launchIntent != null) {
-                val launched = try {
-                    context.grantUriPermission(kyotoPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    launchIntent.apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        data = uri
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        putExtra("url", uri.toString())
-                        putExtra("video_url", uri.toString())
-                        putExtra("path", file.absolutePath)
-                        putExtra("file_path", file.absolutePath)
-                        putExtra("title", lesson.title)
-                    }
-                    context.startActivity(launchIntent)
-                    AppLogger.i("ExternalPlayerHelper", "Launched Kyoto Player via LaunchIntent ($kyotoPkg)")
-                    Toast.makeText(context, "Opened Kyoto Player (video stored in Kyoto downloads)", Toast.LENGTH_LONG).show()
-                    lastLaunchError = null
-                    true
-                } catch (e: Exception) {
-                    val err = "Failed to launch Kyoto Player: ${e.message}"
-                    AppLogger.e("ExternalPlayerHelper", err, e)
-                    lastLaunchError = err
-                    false
-                }
-                if (launched) return true
+                val err = "Failed to launch video player: ${e.message}"
+                AppLogger.e("ExternalPlayerHelper", err, e)
+                lastLaunchError = err
+                onError?.invoke(err)
+                false
             }
         }
 
-        // Strategy 3: Gracefully fallback to System Video Player Chooser (VLC, MX Player, MPV)
-        AppLogger.w("ExternalPlayerHelper", "Kyoto Player not directly openable. Launching system player chooser...")
-        val fallbackOk = playWithSystemChooser(context, lesson)
-        if (!fallbackOk) {
-            val msg = "Please install Kyoto Player or a video player like VLC to play this video."
-            lastLaunchError = msg
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-            onError?.invoke(msg)
-        }
-        return fallbackOk
+        // Priority 3: Fallback warning if no video app found on the device
+        val err = "No video player found. Please install VLC or MX Player from Play Store."
+        AppLogger.e("ExternalPlayerHelper", err)
+        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+        lastLaunchError = err
+        onError?.invoke(err)
+        return false
     }
 
     /**

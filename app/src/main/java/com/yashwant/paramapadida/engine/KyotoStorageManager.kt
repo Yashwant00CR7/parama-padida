@@ -68,24 +68,20 @@ object KyotoStorageManager {
         val candidates = mutableListOf<File>()
         val extStorage = Environment.getExternalStorageDirectory()
 
-        // 1. Direct Kyoto Player package directory: Android/data/<kyotoPkg>/files/Downloads/
+        // 1. Standard Public Movies directory (universally scanned by VLC, MX Player, Gallery)
+        val publicMovies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+        candidates.add(File(publicMovies, "ParamaPadida/$sanitizedTitle"))
+        candidates.add(File(publicMovies, "KyotoPlayer/$sanitizedTitle"))
+
+        // 2. Standard Public Downloads directory
+        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        candidates.add(File(publicDownloads, "ParamaPadida/$sanitizedTitle"))
+        candidates.add(File(publicDownloads, "KyotoPlayer/$sanitizedTitle"))
+
+        // 3. Kyoto Player app data directory if accessible
         val kyotoAppDataDir = File(extStorage, "Android/data/$kyotoPkg/files")
         candidates.add(File(kyotoAppDataDir, "Downloads/$sanitizedTitle"))
         candidates.add(File(kyotoAppDataDir, sanitizedTitle))
-        candidates.add(File(kyotoAppDataDir, "Downloads"))
-        candidates.add(kyotoAppDataDir)
-
-        // 2. Public Download / KyotoPlayer directory: /storage/emulated/0/Download/KyotoPlayer/<title>
-        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        candidates.add(File(publicDownloads, "KyotoPlayer/$sanitizedTitle"))
-        candidates.add(File(publicDownloads, "Kyotoko/$sanitizedTitle"))
-        candidates.add(File(publicDownloads, "KyotoPlayer"))
-
-        // 3. Public Movies / KyotoPlayer directory: /storage/emulated/0/Movies/KyotoPlayer/<title>
-        val publicMovies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-        candidates.add(File(publicMovies, "KyotoPlayer/$sanitizedTitle"))
-        candidates.add(File(publicMovies, "Kyotoko/$sanitizedTitle"))
-        candidates.add(File(publicMovies, "KyotoPlayer"))
 
         // 4. Root storage: /storage/emulated/0/KyotoPlayer/<title>
         candidates.add(File(extStorage, "KyotoPlayer/$sanitizedTitle"))

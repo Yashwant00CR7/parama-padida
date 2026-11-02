@@ -236,14 +236,6 @@ fun CourseDetailScreen(
                                 }
                             )
 
-                            DropdownMenuItem(
-                                text = { Text("Kyoto Storage Permissions", color = TextPrimary) },
-                                leadingIcon = { Icon(Icons.Default.FolderShared, contentDescription = null, tint = AccentBlue) },
-                                onClick = {
-                                    showOptionsMenu = false
-                                    KyotoStorageManager.requestAllFilesAccess(context)
-                                }
-                            )
                         }
                     }
                 },
@@ -254,68 +246,17 @@ fun CourseDetailScreen(
         },
         containerColor = DarkBackground
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            var hasStorageAccess by remember { mutableStateOf(KyotoStorageManager.hasAllFilesAccess()) }
-            if (!hasStorageAccess) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            tint = AccentBlue,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Direct Kyoto Player Storage",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
-                            Text(
-                                text = "Allow storage access to place downloads directly in Kyoto Player's folder.",
-                                fontSize = 11.sp,
-                                color = TextSecondary
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Button(
-                            onClick = {
-                                KyotoStorageManager.requestAllFilesAccess(context)
-                                hasStorageAccess = KyotoStorageManager.hasAllFilesAccess()
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
-                        ) {
-                            Text("Allow", fontSize = 11.sp, color = Color.White)
-                        }
-                    }
-                }
-            }
-
             // 5-Column Grid matching user's screenshot
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 80.dp)
@@ -613,9 +554,9 @@ fun LessonActionBottomSheet(
                     modifier = Modifier.size(13.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                val parentName = File(lesson.localFilePath).parentFile?.name ?: "Downloads"
+                val parentName = File(lesson.localFilePath).parentFile?.name ?: "Movies"
                 Text(
-                    text = "Stored under Kyoto Player ($parentName)",
+                    text = "Saved in: $parentName",
                     fontSize = 11.sp,
                     color = TextMuted
                 )
@@ -626,7 +567,7 @@ fun LessonActionBottomSheet(
 
         // Action Buttons arranged in pill rows matching the screenshot
         if (lesson.isDownloaded) {
-            // Big White Pill button: Play in Kyoto Player!
+            // Big White Pill button: Play Video (VLC, MX Player, System Default)
             Button(
                 onClick = onPlayInKyotoPlayer,
                 modifier = Modifier
@@ -645,15 +586,15 @@ fun LessonActionBottomSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Play in Kyoto Player",
+                    text = "Play Video",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 16.sp
                 )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Secondary Outlined Pill: Open in Other Video Player
+            // Secondary Outlined Pill: Choose Player
             OutlinedButton(
                 onClick = onPlayInSystemChooser,
                 modifier = Modifier
@@ -673,7 +614,7 @@ fun LessonActionBottomSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Open in Other Video Player",
+                    text = "Choose Player...",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
                     color = TextSecondary
