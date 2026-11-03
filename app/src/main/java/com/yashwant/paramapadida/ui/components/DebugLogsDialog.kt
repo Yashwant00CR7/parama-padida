@@ -32,6 +32,7 @@ import com.yashwant.paramapadida.util.AppLogger
 import com.yashwant.paramapadida.util.LogLevel
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DebugLogsDialog(
     onDismissRequest: () -> Unit,
@@ -123,9 +124,10 @@ fun DebugLogsDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Status Badges Row
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     // Kyoto Status
                     Row(

@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.yashwant.paramapadida.data.model.Course
 import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.data.model.Lesson
@@ -42,7 +43,7 @@ import com.yashwant.paramapadida.util.AppLogger
 import kotlinx.coroutines.launch
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CourseDetailScreen(
     courseId: String,
@@ -215,16 +216,18 @@ fun CourseDetailScreen(
                         Column {
                             Text(
                                 text = course?.title ?: "Learning Folder",
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Episodes ($watchedCount/$totalCount watched • $downloadedCount downloaded)",
+                                text = "$watchedCount / $totalCount completed • $progressPercent%",
                                 fontSize = 12.sp,
-                                color = TextSecondary
+                                color = AccentGreen,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -529,7 +532,10 @@ fun CourseDetailScreen(
                 },
                 onToggleWatched = {
                     coroutineScope.launch {
-                        repository.updateLessonWatchStatus(lesson.id, !lesson.isWatched, courseId)
+                        val newWatchedState = !lesson.isWatched
+                        repository.updateLessonWatchStatus(lesson.id, newWatchedState, courseId)
+                        val msg = if (newWatchedState) "Marked Episode ${lesson.videoIndex} as completed" else "Marked Episode ${lesson.videoIndex} as incomplete"
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -666,6 +672,7 @@ fun LessonGridTile(
  * Bottom sheet matching the design in user's screenshot
  * (Streamlined: Playback Resume, Choose Player, and One-Tap Download Deletion)
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LessonActionBottomSheet(
     lesson: Lesson,
@@ -718,44 +725,115 @@ fun LessonActionBottomSheet(
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Info chips
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        // Responsive Info Badges (FlowRow prevents word breaking like "Unwatch/ed")
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                text = "Duration: ${lesson.formattedDuration}",
-                fontSize = 12.sp,
-                color = TextMuted
-            )
-            Text(text = "•", fontSize = 12.sp, color = TextMuted)
-            Text(
-                text = when {
-                    lesson.isDownloaded -> "Downloaded & Ready"
-                    lesson.downloadStatus == DownloadStatus.DOWNLOADING -> "Downloading (${lesson.downloadProgress}%)"
-                    lesson.downloadStatus == DownloadStatus.QUEUED -> "Queued in Batch"
-                    else -> "Not Downloaded"
-                },
-                fontSize = 12.sp,
+            // Duration Badge
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xFF222222)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = lesson.formattedDuration,
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Download Status Badge
+            Surface(
+                shape = RoundedCornerShape(6.dp),
                 color = when {
-                    lesson.isDownloaded || lesson.downloadStatus == DownloadStatus.DOWNLOADING -> AccentBlue
-                    else -> Color(0xFFF59E0B)
-                },
-                fontWeight = FontWeight.Medium
-            )
-            Text(text = "•", fontSize = 12.sp, color = TextMuted)
-            Text(
-                text = if (lesson.isWatched) "Watched" else "Unwatched",
-                fontSize = 12.sp,
-                color = if (lesson.isWatched) AccentGreen else TextSecondary,
-                fontWeight = FontWeight.Medium
-            )
+                    lesson.isDownloaded -> Color(0xFF132838)
+                    lesson.downloadStatus == DownloadStatus.DOWNLOADING -> Color(0xFF132838)
+                    lesson.downloadStatus == DownloadStatus.QUEUED -> Color(0xFF2E2211)
+                    else -> Color(0xFF222222)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = when {
+                            lesson.isDownloaded -> Icons.Default.DownloadDone
+                            lesson.downloadStatus == DownloadStatus.DOWNLOADING -> Icons.Default.Download
+                            lesson.downloadStatus == DownloadStatus.QUEUED -> Icons.Default.Schedule
+                            else -> Icons.Default.CloudDownload
+                        },
+                        contentDescription = null,
+                        tint = when {
+                            lesson.isDownloaded || lesson.downloadStatus == DownloadStatus.DOWNLOADING -> AccentBlue
+                            lesson.downloadStatus == DownloadStatus.QUEUED -> Color(0xFFF59E0B)
+                            else -> TextMuted
+                        },
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = when {
+                            lesson.isDownloaded -> "Downloaded"
+                            lesson.downloadStatus == DownloadStatus.DOWNLOADING -> "Downloading ${lesson.downloadProgress}%"
+                            lesson.downloadStatus == DownloadStatus.QUEUED -> "Queued"
+                            else -> "Not Downloaded"
+                        },
+                        fontSize = 12.sp,
+                        color = when {
+                            lesson.isDownloaded || lesson.downloadStatus == DownloadStatus.DOWNLOADING -> AccentBlue
+                            lesson.downloadStatus == DownloadStatus.QUEUED -> Color(0xFFF59E0B)
+                            else -> TextMuted
+                        },
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Completion / Watched Status Badge
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (lesson.isWatched) Color(0xFF172C1E) else Color(0xFF222222)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (lesson.isWatched) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (lesson.isWatched) AccentGreen else TextMuted,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (lesson.isWatched) "Completed" else "Unwatched",
+                        fontSize = 12.sp,
+                        color = if (lesson.isWatched) AccentGreen else TextMuted,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
 
         if (lesson.isDownloaded && !lesson.localFilePath.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -790,7 +868,12 @@ fun LessonActionBottomSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.History,
                                 contentDescription = null,
@@ -802,7 +885,9 @@ fun LessonActionBottomSheet(
                                 text = "Last watched: ${lesson.formattedProgress} / ${lesson.formattedDuration} (${(lesson.progressFraction * 100).toInt()}%)",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFA7F3D0)
+                                color = Color(0xFFA7F3D0),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
@@ -813,7 +898,7 @@ fun LessonActionBottomSheet(
                             color = TextSecondary,
                             modifier = Modifier
                                 .clickable(onClick = onResetProgress)
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
 
@@ -858,7 +943,9 @@ fun LessonActionBottomSheet(
                     Text(
                         text = "Resume at ${lesson.formattedProgress}",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -887,7 +974,9 @@ fun LessonActionBottomSheet(
                         text = "Start from Beginning (0:00)",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp,
-                        color = TextSecondary
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             } else {
@@ -912,7 +1001,9 @@ fun LessonActionBottomSheet(
                     Text(
                         text = "Play Video",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -932,7 +1023,7 @@ fun LessonActionBottomSheet(
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E3E3E))
             ) {
                 Icon(
-                    imageVector = Icons.Default.OpenInNew,
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
                     tint = TextSecondary
@@ -942,7 +1033,9 @@ fun LessonActionBottomSheet(
                     text = "Choose Player...",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         } else {
@@ -971,7 +1064,9 @@ fun LessonActionBottomSheet(
                         else -> "Download Episode"
                     },
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -1023,63 +1118,75 @@ fun LessonActionBottomSheet(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
+        // Bottom Action Controls (Responsive flex row with custom content padding)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Toggle Watched Button
+            // Toggle Mark Completed Button
             OutlinedButton(
                 onClick = onToggleWatched,
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp),
+                    .defaultMinSize(minHeight = 48.dp),
                 shape = RoundedCornerShape(24.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (lesson.isWatched) TextSecondary else AccentGreen
+                    containerColor = if (lesson.isWatched) Color(0xFF142918) else Color.Transparent,
+                    contentColor = if (lesson.isWatched) AccentGreen else Color.White
                 ),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
-                    if (lesson.isWatched) Color(0xFF444444) else AccentGreen
+                    if (lesson.isWatched) AccentGreen else Color(0xFF444444)
                 )
             ) {
                 Icon(
-                    imageVector = if (lesson.isWatched) Icons.Default.Close else Icons.Default.Check,
+                    imageVector = if (lesson.isWatched) Icons.Default.CheckCircle else Icons.Default.Check,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(18.dp),
+                    tint = if (lesson.isWatched) AccentGreen else Color.White
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (lesson.isWatched) "Mark Unwatched" else "Mark Watched",
+                    text = if (lesson.isWatched) "Completed" else "Mark Completed",
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
             if (lesson.isDownloaded) {
-                // Delete Download Button with Red Accent
+                // Delete Download File Button
                 OutlinedButton(
                     onClick = onRequestDeleteDownload,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp),
+                        .defaultMinSize(minHeight = 48.dp),
                     shape = RoundedCornerShape(24.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFEF4444)
+                        containerColor = Color(0xFF261214),
+                        contentColor = Color(0xFFFF5252)
                     ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF6B242A))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(18.dp),
+                        tint = Color(0xFFFF5252)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Delete File",
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

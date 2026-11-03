@@ -110,7 +110,11 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 16.dp)
+                    ) {
                         Text(
                             text = "Study Progress",
                             fontSize = 14.sp,
@@ -120,15 +124,17 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "$watchedVideos / $totalVideos Lessons Watched",
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             color = TextPrimary,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         LinearProgressIndicator(
                             progress = { if (totalVideos > 0) watchedVideos.toFloat() / totalVideos.toFloat() else 0f },
                             modifier = Modifier
-                                .width(200.dp)
+                                .fillMaxWidth()
                                 .height(6.dp)
                                 .clip(RoundedCornerShape(3.dp)),
                             color = AccentGreen,
@@ -306,7 +312,9 @@ fun CourseCard(
                         text = "${course.watchedVideos} / ${course.totalVideos} watched",
                         fontSize = 12.sp,
                         color = AccentGreen,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "•",
@@ -316,7 +324,8 @@ fun CourseCard(
                     Text(
                         text = "${(course.progressPercent * 100).toInt()}%",
                         fontSize = 12.sp,
-                        color = TextSecondary
+                        color = TextSecondary,
+                        maxLines = 1
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
