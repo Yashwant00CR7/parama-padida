@@ -169,9 +169,10 @@ class DownloadWorker(
 
         // YouTube formats: b selects combined pre-muxed stream; 22 (720p), 18 (360p) are universal MP4 fallbacks
         val formatOption = when (quality) {
-            "720" -> "b[height<=720]/best[height<=720]/b/best/22/18/w"
             "1080" -> "b[height<=1080]/best[height<=1080]/b/best/22/18/w"
-            "audio" -> "ba/bestaudio"
+            "720" -> "b[height<=720]/best[height<=720]/b/best/22/18/w"
+            "480" -> "b[height<=480]/best[height<=480]/b/best/18/w"
+            "audio" -> "140/ba[ext=m4a]/ba/bestaudio"
             else -> "b[height<=720]/best[height<=720]/b/best/22/18/w"
         }
 
@@ -179,6 +180,10 @@ class DownloadWorker(
             val request = YoutubeDLRequest(lesson.webUrl).apply {
                 addOption("-o", outputTemplate)
                 addOption("-f", formatOption)
+                addOption("--write-subs")
+                addOption("--write-auto-subs")
+                addOption("--sub-lang", "en.*,en")
+                addOption("--convert-subs", "vtt")
                 addOption("--no-mtime")
                 addOption("--no-part")
                 addOption("--no-warnings")
@@ -210,9 +215,14 @@ class DownloadWorker(
                 }
             }
 
-            // Find downloaded file matching the index prefix in the folder
+            // Find downloaded media file matching the index prefix in the folder (exclude temp and subtitle files)
             val downloadedFile = courseFolder.listFiles()?.firstOrNull { file ->
-                file.name.startsWith(indexPrefix) && file.length() > 0 && !file.name.endsWith(".part") && !file.name.endsWith(".ytdl")
+                file.name.startsWith(indexPrefix) &&
+                    file.length() > 0 &&
+                    !file.name.endsWith(".part") &&
+                    !file.name.endsWith(".ytdl") &&
+                    !file.name.endsWith(".vtt") &&
+                    !file.name.endsWith(".srt")
             }
 
             if (downloadedFile != null && downloadedFile.exists()) {
@@ -225,6 +235,14 @@ class DownloadWorker(
                 )
                 // Register with system MediaScanner and mirror to Kyoto Player storage
                 com.yashwant.paramapadida.engine.KyotoStorageManager.registerAndSyncMedia(context, downloadedFile)
+
+                // Also scan any companion subtitle files for media scanners
+                courseFolder.listFiles()?.filter {
+                    it.name.startsWith(indexPrefix) && (it.extension.equals("vtt", ignoreCase = true) || it.extension.equals("srt", ignoreCase = true))
+                }?.forEach { subFile ->
+                    android.media.MediaScannerConnection.scanFile(context, arrayOf(subFile.absolutePath), null, null)
+                }
+
                 true
             } else {
                 val err = "File not found after download for index ${lesson.videoIndex} in ${courseFolder.absolutePath}"

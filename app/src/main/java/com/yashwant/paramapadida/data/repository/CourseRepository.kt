@@ -3,6 +3,7 @@ package com.yashwant.paramapadida.data.repository
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.os.Environment
+import android.os.StatFs
 import androidx.work.*
 import com.yashwant.paramapadida.data.local.AppDatabase
 import com.yashwant.paramapadida.data.model.Course
@@ -22,6 +23,7 @@ class CourseRepository(private val context: Context) {
     private val lessonDao = database.lessonDao()
     private val noteDao = database.noteDao()
     private val workManager = WorkManager.getInstance(context)
+    private val qualityPrefs = context.getSharedPreferences("parama_quality_prefs", Context.MODE_PRIVATE)
 
     val allCourses: Flow<List<Course>> = courseDao.getAllCourses()
 
@@ -113,9 +115,10 @@ class CourseRepository(private val context: Context) {
      * Enqueues all un-downloaded lessons in a course for sequential batch download.
      * Only 1 video will download at a time to keep RAM and CPU footprint minimal.
      */
-    suspend fun queueCourseDownloads(courseId: String, quality: String = "720") = withContext(Dispatchers.IO) {
+    suspend fun queueCourseDownloads(courseId: String, quality: String? = null) = withContext(Dispatchers.IO) {
+        val selectedQuality = quality ?: getCourseQuality(courseId)
         lessonDao.markCourseNonDownloadedAs(courseId, DownloadStatus.QUEUED)
-        startSequentialDownloader(quality)
+        startSequentialDownloader(selectedQuality)
     }
 
     /**
@@ -153,6 +156,20 @@ class CourseRepository(private val context: Context) {
             }
             // Deregister from system MediaScanner so VLC and Gallery immediately remove ghost entries
             MediaScannerConnection.scanFile(context, arrayOf(path), null, null)
+
+            // Remove associated subtitle files (.vtt, .srt)
+            val parentDir = file.parentFile
+            if (parentDir != null && parentDir.exists()) {
+                val baseName = file.nameWithoutExtension
+                parentDir.listFiles()?.filter {
+                    it.name.startsWith(baseName) && (it.extension.equals("vtt", ignoreCase = true) || it.extension.equals("srt", ignoreCase = true))
+                }?.forEach { subFile ->
+                    try {
+                        subFile.delete()
+                        MediaScannerConnection.scanFile(context, arrayOf(subFile.absolutePath), null, null)
+                    } catch (_: Exception) {}
+                }
+            }
 
             // Remove any mirror copies with matching filename
             val fileName = file.name
@@ -202,6 +219,46 @@ class CourseRepository(private val context: Context) {
         count
     }
 
+    /**
+     * Calculates storage metrics for a course:
+     * - Space occupied by course files
+     * - Free storage on internal device partition
+     * - Total internal device capacity
+     */
+    fun getCourseStorageStats(lessons: List<Lesson>): CourseStorageStats {
+        var totalBytes = 0L
+        var count = 0
+        for (lesson in lessons) {
+            val path = lesson.localFilePath
+            if (!path.isNullOrBlank()) {
+                val file = File(path)
+                if (file.exists()) {
+                    totalBytes += file.length()
+                    count++
+                }
+            }
+        }
+
+        val statFs = StatFs(Environment.getDataDirectory().path)
+        val freeBytes = statFs.availableBlocksLong * statFs.blockSizeLong
+        val totalDeviceBytes = statFs.blockCountLong * statFs.blockSizeLong
+
+        return CourseStorageStats(
+            courseBytes = totalBytes,
+            downloadedCount = count,
+            deviceFreeBytes = freeBytes,
+            deviceTotalBytes = totalDeviceBytes
+        )
+    }
+
+    fun getCourseQuality(courseId: String): String {
+        return qualityPrefs.getString("quality_$courseId", "720") ?: "720"
+    }
+
+    fun setCourseQuality(courseId: String, quality: String) {
+        qualityPrefs.edit().putString("quality_$courseId", quality).apply()
+    }
+
     suspend fun addNote(lessonId: String, courseId: String, timestampMs: Long, text: String): Long =
         withContext(Dispatchers.IO) {
             noteDao.insertNote(
@@ -220,5 +277,43 @@ class CourseRepository(private val context: Context) {
 
     suspend fun deleteCourse(courseId: String) = withContext(Dispatchers.IO) {
         courseDao.deleteCourseById(courseId)
+    }
+}
+
+/**
+ * Encapsulates course and device storage metrics.
+ */
+data class CourseStorageStats(
+    val courseBytes: Long,
+    val downloadedCount: Int,
+    val deviceFreeBytes: Long,
+    val deviceTotalBytes: Long
+) {
+    val formattedCourseSize: String
+        get() = formatBytes(courseBytes)
+
+    val formattedDeviceFree: String
+        get() = formatBytes(deviceFreeBytes)
+
+    val formattedDeviceTotal: String
+        get() = formatBytes(deviceTotalBytes)
+
+    val deviceUsedPercent: Float
+        get() = if (deviceTotalBytes > 0) {
+            ((deviceTotalBytes - deviceFreeBytes).toFloat() / deviceTotalBytes.toFloat()).coerceIn(0f, 1f)
+        } else 0f
+
+    companion object {
+        fun formatBytes(bytes: Long): String {
+            if (bytes <= 0) return "0 MB"
+            val kb = bytes / 1024.0
+            val mb = kb / 1024.0
+            val gb = mb / 1024.0
+            return when {
+                gb >= 1.0 -> String.format(java.util.Locale.US, "%.1f GB", gb)
+                mb >= 1.0 -> String.format(java.util.Locale.US, "%.1f MB", mb)
+                else -> String.format(java.util.Locale.US, "%.0f KB", kb)
+            }
+        }
     }
 }

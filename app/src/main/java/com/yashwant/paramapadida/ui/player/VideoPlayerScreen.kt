@@ -3,6 +3,7 @@ package com.yashwant.paramapadida.ui.player
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -44,16 +45,21 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.yashwant.paramapadida.data.model.Lesson
 import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.engine.ExternalPlayerHelper
+import com.yashwant.paramapadida.service.PlaybackService
 import com.yashwant.paramapadida.ui.theme.AccentBlue
 import com.yashwant.paramapadida.ui.theme.AccentGreen
 import com.yashwant.paramapadida.ui.theme.DarkBackground
@@ -113,6 +119,10 @@ fun VideoPlayerScreen(
     // Auto-advance countdown at video end
     var autoAdvanceCountdown by remember { mutableStateOf<Int?>(null) }
 
+    // Subtitle & Closed Captions State
+    var isSubtitlesEnabled by remember { mutableStateOf(true) }
+    var hasAvailableSubtitles by remember { mutableStateOf(false) }
+
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val maxVolume = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
 
@@ -120,6 +130,51 @@ fun VideoPlayerScreen(
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
+        }
+    }
+
+    // Toggle subtitles handler
+    val toggleSubtitles: () -> Unit = {
+        val newState = !isSubtitlesEnabled
+        isSubtitlesEnabled = newState
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !newState)
+            .build()
+        Toast.makeText(context, if (newState) "Subtitles (CC) ON" else "Subtitles (CC) OFF", Toast.LENGTH_SHORT).show()
+    }
+
+    // MediaSession for lock-screen & background playback
+    val mediaSession = remember(exoPlayer) {
+        try {
+            MediaSession.Builder(context, exoPlayer)
+                .setId("ParamaSession_${System.currentTimeMillis()}")
+                .build()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    DisposableEffect(mediaSession) {
+        if (mediaSession != null) {
+            PlaybackService.activeSession = mediaSession
+            val serviceIntent = Intent(context, PlaybackService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            } catch (_: Exception) {}
+        }
+
+        onDispose {
+            PlaybackService.activeSession = null
+            val serviceIntent = Intent(context, PlaybackService::class.java)
+            try {
+                context.stopService(serviceIntent)
+            } catch (_: Exception) {}
+            mediaSession?.release()
         }
     }
 
@@ -159,7 +214,34 @@ fun VideoPlayerScreen(
         }
 
         if (mediaUri != null) {
-            val mediaItem = MediaItem.fromUri(mediaUri)
+            val metadata = MediaMetadata.Builder()
+                .setTitle(lesson.title)
+                .setArtist("Parama Padida")
+                .setAlbumTitle("Episode ${lesson.videoIndex}")
+                .setArtworkUri(if (lesson.thumbnailUrl.isNotBlank()) Uri.parse(lesson.thumbnailUrl) else null)
+                .build()
+
+            val mediaItemBuilder = MediaItem.Builder()
+                .setUri(mediaUri)
+                .setMediaMetadata(metadata)
+
+            val subFile = findSubtitleFile(localPath)
+            hasAvailableSubtitles = (subFile != null && subFile.exists())
+            if (hasAvailableSubtitles && subFile != null) {
+                val mimeType = if (subFile.extension.equals("srt", ignoreCase = true)) {
+                    MimeTypes.APPLICATION_SUBRIP
+                } else {
+                    MimeTypes.TEXT_VTT
+                }
+                val subConfig = MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(subFile))
+                    .setMimeType(mimeType)
+                    .setLanguage("en")
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                    .build()
+                mediaItemBuilder.setSubtitleConfigurations(listOf(subConfig))
+            }
+
+            val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
 
@@ -362,6 +444,10 @@ fun VideoPlayerScreen(
                     player = exoPlayer
                     useController = false
                     resizeMode = aspectRatioMode.resizeMode
+                    subtitleView?.apply {
+                        setUserDefaultStyle()
+                        setUserDefaultTextSize()
+                    }
                 }
             },
             update = { playerView ->
@@ -578,6 +664,49 @@ fun VideoPlayerScreen(
                                 )
                             }
                         }
+                    }
+
+                    // Subtitles [CC] Toggle Button
+                    IconButton(onClick = {
+                        if (hasAvailableSubtitles) {
+                            toggleSubtitles()
+                        } else {
+                            Toast.makeText(context, "No subtitle track available for this episode", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    if (hasAvailableSubtitles && isSubtitlesEnabled) AccentBlue
+                                    else Color.White.copy(alpha = 0.2f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "CC",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (hasAvailableSubtitles && isSubtitlesEnabled) Color.Black else Color.White
+                            )
+                        }
+                    }
+
+                    // Background Audio / Lock-Screen Headphone Icon
+                    IconButton(onClick = {
+                        Toast.makeText(
+                            context,
+                            "Background Audio Active • Playback continues with lock-screen controls when locked",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Headphones,
+                            contentDescription = "Background Audio / Podcast Mode",
+                            tint = AccentGreen,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
 
                     // PiP Button
@@ -847,5 +976,18 @@ private fun formatMs(ms: Long): String {
         String.format("%d:%02d:%02d", hours, remMinutes, seconds)
     } else {
         String.format("%d:%02d", minutes, seconds)
+    }
+}
+
+private fun findSubtitleFile(localFilePath: String?): File? {
+    if (localFilePath.isNullOrBlank()) return null
+    val mediaFile = File(localFilePath)
+    val parent = mediaFile.parentFile ?: return null
+    if (!parent.exists()) return null
+    val baseName = mediaFile.nameWithoutExtension
+    return parent.listFiles()?.firstOrNull { file ->
+        file.isFile &&
+            file.name.startsWith(baseName) &&
+            (file.extension.equals("vtt", ignoreCase = true) || file.extension.equals("srt", ignoreCase = true))
     }
 }

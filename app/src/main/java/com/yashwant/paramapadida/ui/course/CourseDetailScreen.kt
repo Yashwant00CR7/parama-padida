@@ -58,6 +58,8 @@ fun CourseDetailScreen(
 
     var ascendingOrder by remember { mutableStateOf(true) }
     val lessons by repository.getLessons(courseId, ascendingOrder).collectAsState(initial = emptyList())
+    val storageStats = remember(lessons) { repository.getCourseStorageStats(lessons) }
+    var selectedQuality by remember { mutableStateOf(repository.getCourseQuality(courseId)) }
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -298,8 +300,8 @@ fun CourseDetailScreen(
                                     showOptionsMenu = false
                                     course?.let { c ->
                                         coroutineScope.launch {
-                                            repository.queueCourseDownloads(c.id)
-                                            Toast.makeText(context, "Queued all episodes for sequential batch download", Toast.LENGTH_SHORT).show()
+                                            repository.queueCourseDownloads(c.id, selectedQuality)
+                                            Toast.makeText(context, "Queued all episodes ($selectedQuality) for sequential batch download", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -398,6 +400,32 @@ fun CourseDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
+                if (searchQuery.isBlank()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(5) }) {
+                        CourseStorageDashboardCard(
+                            storageStats = storageStats,
+                            selectedQuality = selectedQuality,
+                            onQualityChanged = { q ->
+                                selectedQuality = q
+                                repository.setCourseQuality(courseId, q)
+                                Toast.makeText(context, "Download quality set to ${getQualityDisplayName(q)}", Toast.LENGTH_SHORT).show()
+                            },
+                            onCleanWatched = {
+                                coroutineScope.launch {
+                                    val count = repository.deleteWatchedDownloads(courseId)
+                                    Toast.makeText(context, if (count > 0) "Cleaned $count watched video(s) from storage" else "No watched videos to delete", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onDownloadRemaining = {
+                                coroutineScope.launch {
+                                    repository.queueCourseDownloads(courseId, selectedQuality)
+                                    Toast.makeText(context, "Queued remaining episodes ($selectedQuality)", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+                    }
+                }
+
                 if (searchQuery.isBlank() && continueTargetLesson != null) {
                     item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(5) }) {
                         Card(
@@ -1293,5 +1321,196 @@ fun LessonActionBottomSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CourseStorageDashboardCard(
+    storageStats: com.yashwant.paramapadida.data.repository.CourseStorageStats,
+    selectedQuality: String,
+    onQualityChanged: (String) -> Unit,
+    onCleanWatched: () -> Unit,
+    onDownloadRemaining: () -> Unit
+) {
+    var showQualityMenu by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkCard),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF233544))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            // Header stats
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.SdStorage,
+                        contentDescription = null,
+                        tint = AccentBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "${storageStats.formattedCourseSize} • ${storageStats.downloadedCount} downloaded",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+
+                Text(
+                    text = "${storageStats.formattedDeviceFree} free on device",
+                    fontSize = 12.sp,
+                    color = AccentGreen,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Storage bar
+            LinearProgressIndicator(
+                progress = { storageStats.deviceUsedPercent },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = AccentBlue,
+                trackColor = Color(0xFF1E293B)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Quality Chip & Quick Actions
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Quality Selector Chip
+                Box {
+                    Surface(
+                        onClick = { showQualityMenu = true },
+                        shape = RoundedCornerShape(8.dp),
+                        color = DarkCardHighlight,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.4f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = null,
+                                tint = AccentBlue,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = getQualityDisplayName(selectedQuality),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showQualityMenu,
+                        onDismissRequest = { showQualityMenu = false },
+                        modifier = Modifier.background(DarkSurface)
+                    ) {
+                        listOf(
+                            "1080" to "1080p HD (For coding/charts)",
+                            "720" to "720p HD (Balanced default)",
+                            "480" to "480p SD (Space saver)",
+                            "audio" to "Audio Only (M4A Podcast)"
+                        ).forEach { (qKey, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 13.sp,
+                                        color = if (selectedQuality == qKey) AccentBlue else TextPrimary,
+                                        fontWeight = if (selectedQuality == qKey) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                onClick = {
+                                    onQualityChanged(qKey)
+                                    showQualityMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Quick Action Buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Clean Watched
+                    OutlinedButton(
+                        onClick = onCleanWatched,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Clean Watched", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    // Download Remaining
+                    Button(
+                        onClick = onDownloadRemaining,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentBlue),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Download", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun getQualityDisplayName(quality: String): String {
+    return when (quality) {
+        "1080" -> "1080p HD"
+        "720" -> "720p HD"
+        "480" -> "480p SD"
+        "audio" -> "Audio M4A"
+        else -> quality
     }
 }

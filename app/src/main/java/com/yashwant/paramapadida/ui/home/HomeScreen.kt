@@ -224,17 +224,18 @@ fun HomeScreen(
     if (showImportDialog) {
         ImportPlaylistDialog(
             onDismiss = { showImportDialog = false },
-            onImport = { url, category, downloadImmediately ->
+            onImport = { url, category, downloadImmediately, quality ->
                 coroutineScope.launch {
                     try {
                         Toast.makeText(context, "Parsing playlist with yt-dlp...", Toast.LENGTH_SHORT).show()
                         val course = repository.importPlaylist(url, category)
+                        repository.setCourseQuality(course.id, quality)
                         showImportDialog = false
                         Toast.makeText(context, "Course '${course.title}' created!", Toast.LENGTH_SHORT).show()
 
                         if (downloadImmediately) {
-                            repository.queueCourseDownloads(course.id)
-                            Toast.makeText(context, "Queued all episodes for sequential batch download", Toast.LENGTH_SHORT).show()
+                            repository.queueCourseDownloads(course.id, quality)
+                            Toast.makeText(context, "Queued all episodes ($quality) for sequential batch download", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: Exception) {
                         Toast.makeText(context, "Error importing: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
@@ -372,11 +373,13 @@ fun CourseCard(
 @Composable
 fun ImportPlaylistDialog(
     onDismiss: () -> Unit,
-    onImport: (url: String, category: String, downloadAll: Boolean) -> Unit
+    onImport: (url: String, category: String, downloadAll: Boolean, quality: String) -> Unit
 ) {
     var playlistUrl by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("Coding") }
     var downloadAll by remember { mutableStateOf(true) }
+    var selectedQuality by remember { mutableStateOf("720") }
+    var showQualityDropdown by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -428,6 +431,67 @@ fun ImportPlaylistDialog(
                     )
                 )
 
+                // Quality Selector Dropdown
+                val qualityLabel = when (selectedQuality) {
+                    "1080" -> "1080p HD (For coding/charts)"
+                    "720" -> "720p HD (Balanced default)"
+                    "480" -> "480p SD (Space saver)"
+                    "audio" -> "Audio Only (M4A Podcast)"
+                    else -> selectedQuality
+                }
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = qualityLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Download Quality") },
+                        trailingIcon = {
+                            IconButton(onClick = { if (!isLoading) showQualityDropdown = true }) {
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Quality", tint = TextPrimary)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isLoading) { showQualityDropdown = true },
+                        enabled = !isLoading,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = AccentBlue,
+                            unfocusedBorderColor = Color(0xFF444444)
+                        )
+                    )
+
+                    DropdownMenu(
+                        expanded = showQualityDropdown,
+                        onDismissRequest = { showQualityDropdown = false },
+                        modifier = Modifier.background(DarkSurface)
+                    ) {
+                        listOf(
+                            "1080" to "1080p HD (For coding/charts)",
+                            "720" to "720p HD (Balanced default)",
+                            "480" to "480p SD (Space saver)",
+                            "audio" to "Audio Only (M4A Podcast)"
+                        ).forEach { (qKey, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 13.sp,
+                                        color = if (selectedQuality == qKey) AccentBlue else TextPrimary,
+                                        fontWeight = if (selectedQuality == qKey) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                onClick = {
+                                    selectedQuality = qKey
+                                    showQualityDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.clickable { if (!isLoading) downloadAll = !downloadAll }
@@ -471,7 +535,7 @@ fun ImportPlaylistDialog(
                 onClick = {
                     if (playlistUrl.isNotBlank()) {
                         isLoading = true
-                        onImport(playlistUrl.trim(), category.trim(), downloadAll)
+                        onImport(playlistUrl.trim(), category.trim(), downloadAll, selectedQuality)
                     }
                 },
                 enabled = playlistUrl.isNotBlank() && !isLoading,
