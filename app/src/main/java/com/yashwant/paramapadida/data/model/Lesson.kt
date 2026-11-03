@@ -50,6 +50,31 @@ data class Lesson(
                 String.format("%d:%02d", minutes, seconds)
             }
         }
+
+    val durationMs: Long
+        get() = durationSeconds * 1000L
+
+    val formattedProgress: String
+        get() {
+            if (watchProgressMs <= 0) return "0:00"
+            val totalSeconds = watchProgressMs / 1000
+            val minutes = totalSeconds / 60
+            val seconds = totalSeconds % 60
+            return if (minutes >= 60) {
+                val hours = minutes / 60
+                val remMinutes = minutes % 60
+                String.format("%d:%02d:%02d", hours, remMinutes, seconds)
+            } else {
+                String.format("%d:%02d", minutes, seconds)
+            }
+        }
+
+    val progressFraction: Float
+        get() {
+            val totalMs = durationSeconds * 1000L
+            if (totalMs <= 0L) return 0f
+            return (watchProgressMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
+        }
 }
 
 enum class DownloadStatus {

@@ -1,6 +1,8 @@
 package com.yashwant.paramapadida.ui.course
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,11 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.yashwant.paramapadida.data.model.Course
 import com.yashwant.paramapadida.data.model.DownloadStatus
 import com.yashwant.paramapadida.data.model.Lesson
@@ -60,6 +65,108 @@ fun CourseDetailScreen(
     var showLogsDialog by remember { mutableStateOf(false) }
     var activeLessonForLogs by remember { mutableStateOf<Lesson?>(null) }
     var currentSheetError by remember { mutableStateOf<String?>(null) }
+
+    var lessonToDelete by remember { mutableStateOf<Lesson?>(null) }
+    var showDeleteAllConfirmDialog by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Session playback tracker to remember progress across ANY player
+    var activePlaybackLessonId by remember { mutableStateOf<String?>(null) }
+    var activePlaybackStartTime by remember { mutableStateOf(0L) }
+    var activePlaybackInitialPos by remember { mutableStateOf(0L) }
+    var activePlaybackDurationMs by remember { mutableStateOf(0L) }
+
+    // Result contract listener for players like MX Player / VLC that return exact playback position
+    val playerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val lessonId = activePlaybackLessonId
+        if (lessonId != null) {
+            val returnedPos = ExternalPlayerHelper.extractPositionFromResult(result.data)
+            if (returnedPos != null && returnedPos > 0) {
+                coroutineScope.launch {
+                    repository.updateLessonProgress(lessonId, returnedPos, activePlaybackDurationMs, courseId)
+                }
+                val sec = returnedPos / 1000
+                val formatted = String.format("%d:%02d", sec / 60, sec % 60)
+                Toast.makeText(context, "Resumed progress saved: $formatted", Toast.LENGTH_SHORT).show()
+                activePlaybackLessonId = null
+                activePlaybackStartTime = 0L
+            }
+        }
+    }
+
+    // Universal playback resume listener: When user returns to Parama Padida
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val lessonId = activePlaybackLessonId
+                val startTime = activePlaybackStartTime
+                if (lessonId != null && startTime > 0) {
+                    val elapsed = System.currentTimeMillis() - startTime
+                    // If user watched for at least 3 seconds
+                    if (elapsed > 3000) {
+                        val durationMs = activePlaybackDurationMs
+                        val calculatedProgress = if (durationMs > 0) {
+                            (activePlaybackInitialPos + elapsed).coerceAtMost(durationMs)
+                        } else {
+                            activePlaybackInitialPos + elapsed
+                        }
+                        coroutineScope.launch {
+                            repository.updateLessonProgress(lessonId, calculatedProgress, durationMs, courseId)
+                        }
+                        val sec = calculatedProgress / 1000
+                        val formatted = String.format("%d:%02d", sec / 60, sec % 60)
+                        Toast.makeText(context, "Resumed progress saved: $formatted", Toast.LENGTH_SHORT).show()
+                    }
+                    activePlaybackLessonId = null
+                    activePlaybackStartTime = 0L
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    fun startVideoPlayback(lesson: Lesson, resume: Boolean) {
+        val targetPos = if (resume) lesson.watchProgressMs else 0L
+        activePlaybackLessonId = lesson.id
+        activePlaybackStartTime = System.currentTimeMillis()
+        activePlaybackInitialPos = targetPos
+        activePlaybackDurationMs = lesson.durationMs
+        currentSheetError = null
+
+        ExternalPlayerHelper.playDownloadedLesson(
+            context = context,
+            lesson = lesson,
+            resumePositionMs = targetPos,
+            launcher = playerLauncher
+        ) { err ->
+            currentSheetError = err
+        }
+    }
+
+    fun startVideoPlaybackWithChooser(lesson: Lesson, resume: Boolean) {
+        val targetPos = if (resume) lesson.watchProgressMs else 0L
+        activePlaybackLessonId = lesson.id
+        activePlaybackStartTime = System.currentTimeMillis()
+        activePlaybackInitialPos = targetPos
+        activePlaybackDurationMs = lesson.durationMs
+        currentSheetError = null
+
+        val ok = ExternalPlayerHelper.playWithSystemChooser(
+            context = context,
+            lesson = lesson,
+            resumePositionMs = targetPos,
+            launcher = playerLauncher
+        )
+        if (!ok) {
+            currentSheetError = "No external video player installed on device."
+        }
+    }
 
     val filteredLessons = remember(lessons, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -236,6 +343,27 @@ fun CourseDetailScreen(
                                 }
                             )
 
+                            DropdownMenuItem(
+                                text = { Text("Delete Watched Downloads", color = Color(0xFFEF4444)) },
+                                leadingIcon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    coroutineScope.launch {
+                                        val deletedCount = repository.deleteWatchedDownloads(courseId)
+                                        Toast.makeText(context, "Deleted $deletedCount watched videos from storage", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Delete All Downloads", color = Color(0xFFEF4444)) },
+                                leadingIcon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    showDeleteAllConfirmDialog = true
+                                }
+                            )
+
                         }
                     }
                 },
@@ -271,8 +399,77 @@ fun CourseDetailScreen(
         }
     }
 
-    // Bottom Sheet matching the screenshot!
-    selectedLessonForSheet?.let { lesson ->
+    // Confirmation Dialog for deleting a single downloaded video
+    if (lessonToDelete != null) {
+        val target = lessonToDelete!!
+        AlertDialog(
+            onDismissRequest = { lessonToDelete = null },
+            title = { Text("Delete Download?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Delete downloaded video for Episode ${target.videoIndex} (\"${target.title}\") to free up storage?",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            repository.deleteDownloadedVideo(target)
+                            Toast.makeText(context, "Deleted Episode ${target.videoIndex} download", Toast.LENGTH_SHORT).show()
+                            lessonToDelete = null
+                            selectedLessonForSheet = null
+                        }
+                    }
+                ) {
+                    Text("Delete", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { lessonToDelete = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    // Confirmation Dialog for deleting all downloaded videos in this course
+    if (showDeleteAllConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAllConfirmDialog = false },
+            title = { Text("Delete All Downloads?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Are you sure you want to delete all downloaded video files for this course from your device storage?",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteAllConfirmDialog = false
+                        coroutineScope.launch {
+                            val deletedCount = repository.deleteAllCourseDownloads(courseId)
+                            Toast.makeText(context, "Deleted $deletedCount downloaded files", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) {
+                    Text("Delete All", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAllConfirmDialog = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    // Bottom Sheet with Universal Playback Memory & Deletion
+    val activeLesson = filteredLessons.firstOrNull { it.id == selectedLessonForSheet?.id } ?: selectedLessonForSheet
+    activeLesson?.let { lesson ->
         ModalBottomSheet(
             onDismissRequest = {
                 selectedLessonForSheet = null
@@ -299,18 +496,20 @@ fun CourseDetailScreen(
                     selectedLessonForSheet = null
                     currentSheetError = null
                 },
-                onPlayInKyotoPlayer = {
-                    currentSheetError = null
-                    ExternalPlayerHelper.playDownloadedLesson(context, lesson) { err ->
-                        currentSheetError = err
+                onPlayVideo = { resume ->
+                    startVideoPlayback(lesson, resume)
+                },
+                onPlayInSystemChooser = { resume ->
+                    startVideoPlaybackWithChooser(lesson, resume)
+                },
+                onResetProgress = {
+                    coroutineScope.launch {
+                        repository.updateLessonProgress(lesson.id, 0L, lesson.durationMs, courseId)
+                        Toast.makeText(context, "Progress reset to beginning", Toast.LENGTH_SHORT).show()
                     }
                 },
-                onPlayInSystemChooser = {
-                    currentSheetError = null
-                    val success = ExternalPlayerHelper.playWithSystemChooser(context, lesson)
-                    if (!success) {
-                        currentSheetError = "No external video player installed on device."
-                    }
+                onRequestDeleteDownload = {
+                    lessonToDelete = lesson
                 },
                 onOpenLogs = {
                     activeLessonForLogs = lesson
@@ -319,21 +518,18 @@ fun CourseDetailScreen(
                 onDownloadClick = {
                     coroutineScope.launch {
                         if (lesson.isDownloaded) {
-                            repository.deleteDownloadedVideo(lesson)
-                            Toast.makeText(context, "Deleted downloaded file", Toast.LENGTH_SHORT).show()
+                            lessonToDelete = lesson
                         } else {
                             repository.queueDownload(lesson)
                             Toast.makeText(context, "Queued Ep #${lesson.videoIndex} for batch download", Toast.LENGTH_SHORT).show()
+                            selectedLessonForSheet = null
+                            currentSheetError = null
                         }
-                        selectedLessonForSheet = null
-                        currentSheetError = null
                     }
                 },
                 onToggleWatched = {
                     coroutineScope.launch {
                         repository.updateLessonWatchStatus(lesson.id, !lesson.isWatched, courseId)
-                        selectedLessonForSheet = null
-                        currentSheetError = null
                     }
                 }
             )
@@ -449,12 +645,26 @@ fun LessonGridTile(
                     .size(12.dp)
             )
         }
+
+        // Playback progress line along bottom edge
+        if (lesson.watchProgressMs > 0 && !isWatched && lesson.progressFraction > 0f) {
+            LinearProgressIndicator(
+                progress = { lesson.progressFraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .align(Alignment.BottomCenter)
+                    .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)),
+                color = AccentGreen,
+                trackColor = Color(0xFF2C2C2C)
+            )
+        }
     }
 }
 
 /**
  * Bottom sheet matching the design in user's screenshot
- * (Now streamlined: exclusively Download + Kyoto Player playback!)
+ * (Streamlined: Playback Resume, Choose Player, and One-Tap Download Deletion)
  */
 @Composable
 fun LessonActionBottomSheet(
@@ -462,8 +672,10 @@ fun LessonActionBottomSheet(
     courseTitle: String,
     errorMessage: String? = null,
     onClose: () -> Unit,
-    onPlayInKyotoPlayer: () -> Unit,
-    onPlayInSystemChooser: () -> Unit,
+    onPlayVideo: (resume: Boolean) -> Unit,
+    onPlayInSystemChooser: (resume: Boolean) -> Unit,
+    onResetProgress: () -> Unit,
+    onRequestDeleteDownload: () -> Unit,
     onOpenLogs: () -> Unit,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit
@@ -563,40 +775,153 @@ fun LessonActionBottomSheet(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Action Buttons arranged in pill rows matching the screenshot
-        if (lesson.isDownloaded) {
-            // Big White Pill button: Play Video (VLC, MX Player, System Default)
-            Button(
-                onClick = onPlayInKyotoPlayer,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(26.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black
-                )
+        // Playback Memory & Resume Status Card
+        if (lesson.watchProgressMs > 0) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF142419)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2A5934))
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Play Video",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = null,
+                                tint = AccentGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Last watched: ${lesson.formattedProgress} / ${lesson.formattedDuration} (${(lesson.progressFraction * 100).toInt()}%)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFA7F3D0)
+                            )
+                        }
+
+                        Text(
+                            text = "Reset",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextSecondary,
+                            modifier = Modifier
+                                .clickable(onClick = onResetProgress)
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LinearProgressIndicator(
+                        progress = { lesson.progressFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = AccentGreen,
+                        trackColor = Color(0xFF243B2A)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Playback Action Buttons
+        if (lesson.isDownloaded) {
+            if (lesson.watchProgressMs > 0) {
+                // Resume Primary Button
+                Button(
+                    onClick = { onPlayVideo(true) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Resume at ${lesson.formattedProgress}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Start from Beginning Button
+                OutlinedButton(
+                    onClick = { onPlayVideo(false) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = TextPrimary
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E3E3E))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Replay,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Start from Beginning (0:00)",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = TextSecondary
+                    )
+                }
+            } else {
+                // Play Video from Beginning
+                Button(
+                    onClick = { onPlayVideo(false) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Play Video",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             // Secondary Outlined Pill: Choose Player
             OutlinedButton(
-                onClick = onPlayInSystemChooser,
+                onClick = { onPlayInSystemChooser(true) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp),
@@ -674,7 +999,7 @@ fun LessonActionBottomSheet(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Kyoto Player Issue",
+                            text = "Playback Issue",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -689,7 +1014,7 @@ fun LessonActionBottomSheet(
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Copy Logs >",
+                        text = "Logs >",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AccentBlue
@@ -733,9 +1058,9 @@ fun LessonActionBottomSheet(
             }
 
             if (lesson.isDownloaded) {
-                // Delete Download Button
+                // Delete Download Button with Red Accent
                 OutlinedButton(
-                    onClick = onDownloadClick,
+                    onClick = onRequestDeleteDownload,
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),

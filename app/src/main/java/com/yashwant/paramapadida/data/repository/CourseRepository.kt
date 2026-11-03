@@ -1,6 +1,8 @@
 package com.yashwant.paramapadida.data.repository
 
 import android.content.Context
+import android.media.MediaScannerConnection
+import android.os.Environment
 import androidx.work.*
 import com.yashwant.paramapadida.data.local.AppDatabase
 import com.yashwant.paramapadida.data.model.Course
@@ -143,13 +145,61 @@ class CourseRepository(private val context: Context) {
     }
 
     suspend fun deleteDownloadedVideo(lesson: Lesson) = withContext(Dispatchers.IO) {
-        if (!lesson.localFilePath.isNullOrBlank()) {
-            val file = File(lesson.localFilePath)
+        val path = lesson.localFilePath
+        if (!path.isNullOrBlank()) {
+            val file = File(path)
             if (file.exists()) {
                 file.delete()
             }
+            // Deregister from system MediaScanner so VLC and Gallery immediately remove ghost entries
+            MediaScannerConnection.scanFile(context, arrayOf(path), null, null)
+
+            // Remove any mirror copies with matching filename
+            val fileName = file.name
+            if (fileName.isNotBlank()) {
+                val candidateDirs = listOf(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    File(Environment.getExternalStorageDirectory(), "Android/data/com.kyotoplayer/files/Downloads"),
+                    File(Environment.getExternalStorageDirectory(), "KyotoPlayer"),
+                    context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+                )
+                for (base in candidateDirs) {
+                    if (base == null || !base.exists()) continue
+                    base.walkTopDown().maxDepth(3).filter { it.name == fileName }.forEach { mirrorFile ->
+                        try {
+                            mirrorFile.delete()
+                            MediaScannerConnection.scanFile(context, arrayOf(mirrorFile.absolutePath), null, null)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
         }
         lessonDao.updateDownloadStatus(lesson.id, null, DownloadStatus.NOT_DOWNLOADED, 0)
+    }
+
+    suspend fun deleteWatchedDownloads(courseId: String): Int = withContext(Dispatchers.IO) {
+        val lessons = lessonDao.getLessonsForCourseSync(courseId)
+        var count = 0
+        for (lesson in lessons) {
+            if (lesson.isWatched && lesson.isDownloaded) {
+                deleteDownloadedVideo(lesson)
+                count++
+            }
+        }
+        count
+    }
+
+    suspend fun deleteAllCourseDownloads(courseId: String): Int = withContext(Dispatchers.IO) {
+        val lessons = lessonDao.getLessonsForCourseSync(courseId)
+        var count = 0
+        for (lesson in lessons) {
+            if (lesson.isDownloaded) {
+                deleteDownloadedVideo(lesson)
+                count++
+            }
+        }
+        count
     }
 
     suspend fun addNote(lessonId: String, courseId: String, timestampMs: Long, text: String): Long =

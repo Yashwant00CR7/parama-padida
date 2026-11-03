@@ -10,6 +10,9 @@ interface LessonDao {
     @Query("SELECT * FROM lessons WHERE courseId = :courseId ORDER BY videoIndex ASC")
     fun getLessonsForCourseAsc(courseId: String): Flow<List<Lesson>>
 
+    @Query("SELECT * FROM lessons WHERE courseId = :courseId ORDER BY videoIndex ASC")
+    suspend fun getLessonsForCourseSync(courseId: String): List<Lesson>
+
     @Query("SELECT * FROM lessons WHERE courseId = :courseId ORDER BY videoIndex DESC")
     fun getLessonsForCourseDesc(courseId: String): Flow<List<Lesson>>
 
