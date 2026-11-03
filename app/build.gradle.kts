@@ -98,6 +98,13 @@ dependencies {
     // YouTubeDL Android (yt-dlp)
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
 
+    // AndroidX Media3 (VLC-grade ExoPlayer)
+    val media3Version = "1.4.1"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
+
     // Utilities
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

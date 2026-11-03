@@ -48,7 +48,8 @@ import java.io.File
 fun CourseDetailScreen(
     courseId: String,
     repository: CourseRepository,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onPlayLesson: ((Lesson) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -382,7 +383,12 @@ fun CourseDetailScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 5-Column Grid matching user's screenshot
+            val continueTargetLesson = remember(filteredLessons) {
+                filteredLessons.firstOrNull { it.watchProgressMs > 0 && !it.isWatched }
+                    ?: filteredLessons.firstOrNull { !it.isWatched }
+            }
+
+            // 5-Column Grid with Hero Resume Card matching user's layout
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 modifier = Modifier
@@ -392,6 +398,92 @@ fun CourseDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
+                if (searchQuery.isBlank() && continueTargetLesson != null) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(5) }) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp)
+                                .clickable {
+                                    if (onPlayLesson != null) {
+                                        onPlayLesson(continueTargetLesson)
+                                    } else {
+                                        startVideoPlayback(continueTargetLesson, resume = true)
+                                    }
+                                },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = DarkCard),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2C3E50))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = if (continueTargetLesson.watchProgressMs > 0) "RESUME EPISODE ${continueTargetLesson.videoIndex}" else "START EPISODE ${continueTargetLesson.videoIndex}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = AccentBlue
+                                        )
+                                        if (continueTargetLesson.watchProgressMs > 0) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "• ${continueTargetLesson.formattedProgress}",
+                                                fontSize = 11.sp,
+                                                color = AccentGreen,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = continueTargetLesson.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (continueTargetLesson.watchProgressMs > 0) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        LinearProgressIndicator(
+                                            progress = { continueTargetLesson.progressFraction },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(3.dp)
+                                                .clip(RoundedCornerShape(1.5.dp)),
+                                            color = AccentGreen,
+                                            trackColor = Color(0xFF2A2A2A)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 items(filteredLessons, key = { it.id }) { lesson ->
                     LessonGridTile(
                         lesson = lesson,
@@ -500,7 +592,17 @@ fun CourseDetailScreen(
                     currentSheetError = null
                 },
                 onPlayVideo = { resume ->
-                    startVideoPlayback(lesson, resume)
+                    if (!resume) {
+                        coroutineScope.launch {
+                            repository.updateLessonProgress(lesson.id, 0L, lesson.durationMs, courseId)
+                        }
+                    }
+                    if (onPlayLesson != null) {
+                        selectedLessonForSheet = null
+                        onPlayLesson(lesson)
+                    } else {
+                        startVideoPlayback(lesson, resume)
+                    }
                 },
                 onPlayInSystemChooser = { resume ->
                     startVideoPlaybackWithChooser(lesson, resume)
