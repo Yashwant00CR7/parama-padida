@@ -75,27 +75,39 @@ fun CourseDetailScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Session playback tracker to remember progress across ANY player
-    var activePlaybackLessonId by remember { mutableStateOf<String?>(null) }
+    // Session playback tracker to remember progress across ANY external player
+    var activePlaybackLesson by remember { mutableStateOf<Lesson?>(null) }
     var activePlaybackStartTime by remember { mutableStateOf(0L) }
     var activePlaybackInitialPos by remember { mutableStateOf(0L) }
     var activePlaybackDurationMs by remember { mutableStateOf(0L) }
+    var pendingPlaybackPrompt by remember { mutableStateOf<PlaybackReturnPrompt?>(null) }
 
     // Result contract listener for players like MX Player / VLC that return exact playback position
     val playerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val lessonId = activePlaybackLessonId
-        if (lessonId != null) {
-            val returnedPos = ExternalPlayerHelper.extractPositionFromResult(result.data)
-            if (returnedPos != null && returnedPos > 0) {
+        val lesson = activePlaybackLesson
+        if (lesson != null) {
+            val playbackResult = ExternalPlayerHelper.extractPlaybackResult(result.data)
+            if (playbackResult != null) {
                 coroutineScope.launch {
-                    repository.updateLessonProgress(lessonId, returnedPos, activePlaybackDurationMs, courseId)
+                    if (playbackResult.isCompleted) {
+                        repository.updateLessonWatchStatus(lesson.id, true, courseId)
+                    } else if (playbackResult.positionMs > 0) {
+                        repository.updateLessonProgress(
+                            lesson.id,
+                            playbackResult.positionMs,
+                            playbackResult.durationMs ?: activePlaybackDurationMs,
+                            courseId
+                        )
+                    }
                 }
-                val sec = returnedPos / 1000
+                val sec = playbackResult.positionMs / 1000
                 val formatted = String.format("%d:%02d", sec / 60, sec % 60)
-                Toast.makeText(context, "Resumed progress saved: $formatted", Toast.LENGTH_SHORT).show()
-                activePlaybackLessonId = null
+                val msg = if (playbackResult.isCompleted) "Episode ${lesson.videoIndex} completed! 🎉" else "Progress saved: $formatted"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                // Clear active session so ON_RESUME doesn't prompt
+                activePlaybackLesson = null
                 activePlaybackStartTime = 0L
             }
         }
@@ -105,26 +117,22 @@ fun CourseDetailScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                val lessonId = activePlaybackLessonId
+                val lesson = activePlaybackLesson
                 val startTime = activePlaybackStartTime
-                if (lessonId != null && startTime > 0) {
+                if (lesson != null && startTime > 0) {
                     val elapsed = System.currentTimeMillis() - startTime
-                    // If user watched for at least 3 seconds
-                    if (elapsed > 3000) {
-                        val durationMs = activePlaybackDurationMs
-                        val calculatedProgress = if (durationMs > 0) {
-                            (activePlaybackInitialPos + elapsed).coerceAtMost(durationMs)
-                        } else {
-                            activePlaybackInitialPos + elapsed
-                        }
-                        coroutineScope.launch {
-                            repository.updateLessonProgress(lessonId, calculatedProgress, durationMs, courseId)
-                        }
-                        val sec = calculatedProgress / 1000
-                        val formatted = String.format("%d:%02d", sec / 60, sec % 60)
-                        Toast.makeText(context, "Resumed progress saved: $formatted", Toast.LENGTH_SHORT).show()
+                    // If user was in player for at least 5 seconds, prompt for progress confirmation
+                    // instead of blindly writing wall-clock time (which corrupts progress on pause)
+                    if (elapsed >= 5000) {
+                        val dur = if (activePlaybackDurationMs > 0) activePlaybackDurationMs else lesson.durationMs
+                        pendingPlaybackPrompt = PlaybackReturnPrompt(
+                            lesson = lesson,
+                            initialPosMs = activePlaybackInitialPos,
+                            elapsedMs = elapsed,
+                            durationMs = dur
+                        )
                     }
-                    activePlaybackLessonId = null
+                    activePlaybackLesson = null
                     activePlaybackStartTime = 0L
                 }
             }
@@ -137,7 +145,7 @@ fun CourseDetailScreen(
 
     fun startVideoPlayback(lesson: Lesson, resume: Boolean) {
         val targetPos = if (resume) lesson.watchProgressMs else 0L
-        activePlaybackLessonId = lesson.id
+        activePlaybackLesson = lesson
         activePlaybackStartTime = System.currentTimeMillis()
         activePlaybackInitialPos = targetPos
         activePlaybackDurationMs = lesson.durationMs
@@ -155,7 +163,7 @@ fun CourseDetailScreen(
 
     fun startVideoPlaybackWithChooser(lesson: Lesson, resume: Boolean) {
         val targetPos = if (resume) lesson.watchProgressMs else 0L
-        activePlaybackLessonId = lesson.id
+        activePlaybackLesson = lesson
         activePlaybackStartTime = System.currentTimeMillis()
         activePlaybackInitialPos = targetPos
         activePlaybackDurationMs = lesson.durationMs
@@ -172,12 +180,19 @@ fun CourseDetailScreen(
         }
     }
 
-    val filteredLessons = remember(lessons, searchQuery) {
+    var filterMode by remember { mutableStateOf(LessonFilterMode.ALL) }
+
+    val filteredLessons = remember(lessons, searchQuery, filterMode) {
+        val base = when (filterMode) {
+            LessonFilterMode.ALL -> lessons
+            LessonFilterMode.UNWATCHED -> lessons.filter { !it.isWatched }
+            LessonFilterMode.DOWNLOADED -> lessons.filter { it.isDownloaded }
+        }
         if (searchQuery.isBlank()) {
-            lessons
+            base
         } else {
             val q = searchQuery.trim().lowercase()
-            lessons.filter {
+            base.filter {
                 it.videoIndex.toString() == q || it.title.lowercase().contains(q)
             }
         }
@@ -433,11 +448,7 @@ fun CourseDetailScreen(
                                 .fillMaxWidth()
                                 .padding(bottom = 4.dp)
                                 .clickable {
-                                    if (onPlayLesson != null) {
-                                        onPlayLesson(continueTargetLesson)
-                                    } else {
-                                        startVideoPlayback(continueTargetLesson, resume = true)
-                                    }
+                                    startVideoPlayback(continueTargetLesson, resume = true)
                                 },
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = DarkCard),
@@ -445,8 +456,8 @@ fun CourseDetailScreen(
                         ) {
                             Row(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
+                                .fillMaxWidth()
+                                .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
@@ -512,11 +523,74 @@ fun CourseDetailScreen(
                     }
                 }
 
-                items(filteredLessons, key = { it.id }) { lesson ->
-                    LessonGridTile(
-                        lesson = lesson,
-                        onClick = { selectedLessonForSheet = lesson }
-                    )
+                // Filter & Organization Chips
+                if (searchQuery.isBlank() && lessons.isNotEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(5) }) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = filterMode == LessonFilterMode.ALL,
+                                onClick = { filterMode = LessonFilterMode.ALL },
+                                label = { Text("All (${lessons.size})", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = AccentBlue,
+                                    selectedLabelColor = Color.White,
+                                    containerColor = DarkCard,
+                                    labelColor = TextSecondary
+                                )
+                            )
+                            FilterChip(
+                                selected = filterMode == LessonFilterMode.UNWATCHED,
+                                onClick = { filterMode = LessonFilterMode.UNWATCHED },
+                                label = { Text("Unwatched (${lessons.count { !it.isWatched }})", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF1E3A5F),
+                                    selectedLabelColor = AccentBlue,
+                                    containerColor = DarkCard,
+                                    labelColor = TextSecondary
+                                )
+                            )
+                            FilterChip(
+                                selected = filterMode == LessonFilterMode.DOWNLOADED,
+                                onClick = { filterMode = LessonFilterMode.DOWNLOADED },
+                                label = { Text("Downloaded ($downloadedCount)", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF1B2A1E),
+                                    selectedLabelColor = AccentGreen,
+                                    containerColor = DarkCard,
+                                    labelColor = TextSecondary
+                                )
+                            )
+                        }
+                    }
+                }
+
+                if (filteredLessons.isEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(5) }) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (searchQuery.isNotBlank()) "No episodes match \"$searchQuery\"" else "No episodes in this filter",
+                                color = TextMuted,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                } else {
+                    items(filteredLessons, key = { it.id }) { lesson ->
+                        LessonGridTile(
+                            lesson = lesson,
+                            onClick = { selectedLessonForSheet = lesson }
+                        )
+                    }
                 }
             }
         }
@@ -625,12 +699,8 @@ fun CourseDetailScreen(
                             repository.updateLessonProgress(lesson.id, 0L, lesson.durationMs, courseId)
                         }
                     }
-                    if (onPlayLesson != null) {
-                        selectedLessonForSheet = null
-                        onPlayLesson(lesson)
-                    } else {
-                        startVideoPlayback(lesson, resume)
-                    }
+                    selectedLessonForSheet = null
+                    startVideoPlayback(lesson, resume)
                 },
                 onPlayInSystemChooser = { resume ->
                     startVideoPlaybackWithChooser(lesson, resume)
@@ -676,6 +746,33 @@ fun CourseDetailScreen(
         DebugLogsDialog(
             onDismissRequest = { showLogsDialog = false },
             currentLesson = activeLessonForLogs ?: selectedLessonForSheet
+        )
+    }
+
+    pendingPlaybackPrompt?.let { prompt ->
+        PlaybackProgressConfirmationDialog(
+            prompt = prompt,
+            onDismiss = { pendingPlaybackPrompt = null },
+            onConfirmProgress = { confirmedPos ->
+                coroutineScope.launch {
+                    repository.updateLessonProgress(
+                        prompt.lesson.id,
+                        confirmedPos,
+                        prompt.durationMs,
+                        courseId
+                    )
+                }
+                val formatted = formatProgressMs(confirmedPos)
+                Toast.makeText(context, "Progress saved: $formatted", Toast.LENGTH_SHORT).show()
+                pendingPlaybackPrompt = null
+            },
+            onMarkCompleted = {
+                coroutineScope.launch {
+                    repository.updateLessonWatchStatus(prompt.lesson.id, true, courseId)
+                }
+                Toast.makeText(context, "Marked Episode ${prompt.lesson.videoIndex} as completed! 🎉", Toast.LENGTH_SHORT).show()
+                pendingPlaybackPrompt = null
+            }
         )
     }
 }
@@ -1513,4 +1610,203 @@ private fun getQualityDisplayName(quality: String): String {
         "audio" -> "Audio M4A"
         else -> quality
     }
+}
+
+data class PlaybackReturnPrompt(
+    val lesson: Lesson,
+    val initialPosMs: Long,
+    val elapsedMs: Long,
+    val durationMs: Long
+)
+
+enum class LessonFilterMode {
+    ALL,
+    UNWATCHED,
+    DOWNLOADED
+}
+
+private fun formatProgressMs(ms: Long): String {
+    if (ms <= 0L) return "0:00"
+    val totalSeconds = ms / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%d:%02d", minutes, seconds)
+    }
+}
+
+@Composable
+private fun PlaybackProgressConfirmationDialog(
+    prompt: PlaybackReturnPrompt,
+    onDismiss: () -> Unit,
+    onConfirmProgress: (Long) -> Unit,
+    onMarkCompleted: () -> Unit
+) {
+    val durationMs = if (prompt.durationMs > 0) prompt.durationMs else (prompt.initialPosMs + prompt.elapsedMs + 60_000L)
+    val estimatedMs = (prompt.initialPosMs + prompt.elapsedMs).coerceIn(0L, durationMs)
+
+    var currentSliderMs by remember { mutableStateOf(estimatedMs.toFloat()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xFF1E3A5F),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                ) {
+                    Text(
+                        text = "EPISODE ${prompt.lesson.videoIndex}",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentBlue,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                Text(
+                    text = "Update Watch Progress?",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = prompt.lesson.title,
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Current Position Display
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Position: ${formatProgressMs(currentSliderMs.toLong())}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentGreen
+                    )
+                    if (prompt.durationMs > 0) {
+                        Text(
+                            text = "of ${formatProgressMs(prompt.durationMs)}",
+                            fontSize = 13.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Fine-tune Slider
+                Slider(
+                    value = currentSliderMs,
+                    onValueChange = { currentSliderMs = it },
+                    valueRange = 0f..durationMs.toFloat(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = AccentGreen,
+                        activeTrackColor = AccentGreen,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                // Quick Nudge Buttons (-1 min / +1 min)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            currentSliderMs = (currentSliderMs - 60_000f).coerceAtLeast(0f)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp),
+                        shape = RoundedCornerShape(17.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E3E3E))
+                    ) {
+                        Text("-1 min", fontSize = 12.sp, color = TextSecondary)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            currentSliderMs = (currentSliderMs + 60_000f).coerceAtMost(durationMs.toFloat())
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp),
+                        shape = RoundedCornerShape(17.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E3E3E))
+                    ) {
+                        Text("+1 min", fontSize = 12.sp, color = TextSecondary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Primary Save Button
+                Button(
+                    onClick = { onConfirmProgress(currentSliderMs.toLong()) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp),
+                    shape = RoundedCornerShape(23.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentGreen,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Save (${formatProgressMs(currentSliderMs.toLong())})",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Mark Completed Button
+                OutlinedButton(
+                    onClick = onMarkCompleted,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    shape = RoundedCornerShape(21.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AccentGreen)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DoneAll,
+                        contentDescription = null,
+                        tint = AccentGreen,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Mark as 100% Completed", color = AccentGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Keep Previous (${formatProgressMs(prompt.initialPosMs)})", color = TextSecondary)
+            }
+        },
+        confirmButton = {},
+        containerColor = DarkSurface
+    )
 }

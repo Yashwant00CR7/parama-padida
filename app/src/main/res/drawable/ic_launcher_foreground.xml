@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Academic Mortarboard Cap (Top Diamond) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M54,23 L83,36 L54,49 L25,36 Z" />
+
+    <!-- Top Cap Highlight/Facet for 3D depth -->
+    <path
+        android:fillColor="#7DD3FC"
+        android:pathData="M54,23 L83,36 L54,38 L25,36 Z" />
+
+    <!-- Cap Base Arch / Headband -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M37,42 L37,51 C37,59 71,59 71,51 L71,42 C66,46 60,49 54,49 C48,49 42,46 37,42 Z" />
+
+    <!-- Mortarboard Button and Tassel -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M54,34 A2,2 0 1,0 54,38 A2,2 0 1,0 54,34 Z" />
+    <path
+        android:fillColor="#FBBF24"
+        android:strokeColor="#FBBF24"
+        android:strokeWidth="1.5"
+        android:pathData="M54,36 C64,36 78,41 78,48 L78,57" />
+    <!-- Tassel fringed bob -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M76,57 L80,57 L81,63 L75,63 Z" />
+
+    <!-- Vibrant Central Play Glyph with smooth rounded corners -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M46,55 C44.5,54.1 43,55.1 43,56.8 L43,77.2 C43,78.9 44.5,79.9 46,79.0 L63.6,68.8 C65.1,67.9 65.1,66.1 63.6,65.2 Z" />
+
+    <!-- Play Glyph Accent Glint -->
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M43,57 L54,67 L43,73 Z" />
+
+</vector>

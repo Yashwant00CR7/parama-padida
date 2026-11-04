@@ -20,7 +20,6 @@ import com.yashwant.paramapadida.data.repository.CourseRepository
 import com.yashwant.paramapadida.engine.KyotoStorageManager
 import com.yashwant.paramapadida.ui.course.CourseDetailScreen
 import com.yashwant.paramapadida.ui.home.HomeScreen
-import com.yashwant.paramapadida.ui.player.VideoPlayerScreen
 import com.yashwant.paramapadida.ui.theme.DarkBackground
 import com.yashwant.paramapadida.ui.theme.ParamaPadidaTheme
 import kotlinx.coroutines.Dispatchers
@@ -94,31 +93,6 @@ class MainActivity : ComponentActivity() {
                                 courseId = courseId,
                                 repository = repository,
                                 onBackClick = { navController.popBackStack() },
-                                onPlayLesson = { lesson ->
-                                    navController.navigate("player/$courseId/${lesson.id}")
-                                }
-                            )
-                        }
-
-                        composable(
-                            route = "player/{courseId}/{lessonId}",
-                            arguments = listOf(
-                                navArgument("courseId") { type = NavType.StringType },
-                                navArgument("lessonId") { type = NavType.StringType }
-                            )
-                        ) { backStackEntry ->
-                            val courseId = backStackEntry.arguments?.getString("courseId") ?: ""
-                            val lessonId = backStackEntry.arguments?.getString("lessonId") ?: ""
-                            VideoPlayerScreen(
-                                courseId = courseId,
-                                initialLessonId = lessonId,
-                                repository = repository,
-                                onBackClick = { navController.popBackStack() },
-                                onNavigateToLesson = { nextLessonId ->
-                                    navController.navigate("player/$courseId/$nextLessonId") {
-                                        popUpTo("player/$courseId/$lessonId") { inclusive = true }
-                                    }
-                                }
                             )
                         }
                     }

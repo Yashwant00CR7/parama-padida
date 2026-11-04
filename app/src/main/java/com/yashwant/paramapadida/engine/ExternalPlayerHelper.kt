@@ -18,6 +18,12 @@ import java.io.File
 object ExternalPlayerHelper {
     const val DEFAULT_KYOTO_PACKAGE = "com.kyotoplayer"
 
+    data class ExternalPlaybackResult(
+        val positionMs: Long,
+        val durationMs: Long? = null,
+        val isCompleted: Boolean = false
+    )
+
     var lastLaunchError: String? = null
         private set
 
@@ -123,15 +129,15 @@ object ExternalPlayerHelper {
             putExtra("file_path", file.absolutePath)
 
             // Universal Playback Resume / Start Position parameters
+            // Always request return_result so players like MX Player pass back playback status on exit
+            putExtra("return_result", true)
+
             if (resumePositionMs > 0) {
-                // MX Player & standard Android
+                // MX Player expects 'position' as an Int (milliseconds). Do NOT overwrite with Long!
                 putExtra("position", resumePositionMs.toInt())
-                putExtra("position", resumePositionMs)
-                putExtra("return_result", true)
 
                 // VLC for Android
                 putExtra("extra_position", resumePositionMs)
-                putExtra("extra_position", resumePositionMs.toInt())
                 putExtra("time", resumePositionMs)
                 putExtra("from_start", false)
 
@@ -145,31 +151,64 @@ object ExternalPlayerHelper {
                 putExtra("from_start", true)
                 putExtra("position", 0)
                 putExtra("extra_position", 0L)
+                putExtra("time", 0L)
             }
         }
+    }
+
+    /**
+     * Extracts full playback result (position, duration, completion) from player activity results.
+     */
+    fun extractPlaybackResult(resultData: Intent?): ExternalPlaybackResult? {
+        if (resultData == null) return null
+
+        val endBy = resultData.getStringExtra("end_by")
+        val mxDuration = resultData.getIntExtra("duration", -1).takeIf { it > 0 }?.toLong()
+        val vlcDuration = resultData.getLongExtra("extra_duration", -1L).takeIf { it > 0 }
+            ?: resultData.getIntExtra("extra_duration", -1).takeIf { it > 0 }?.toLong()
+        val duration = mxDuration ?: vlcDuration
+
+        // MX Player passes end_by == "playback_completion" when video completes
+        if (endBy.equals("playback_completion", ignoreCase = true)) {
+            val finalPos = duration ?: 0L
+            return ExternalPlaybackResult(
+                positionMs = finalPos,
+                durationMs = duration,
+                isCompleted = true
+            )
+        }
+
+        // 1. MX Player ("position" in ms as int)
+        val mxPos = resultData.getIntExtra("position", -1).takeIf { it >= 0 }?.toLong()
+
+        // 2. VLC ("extra_position" in ms as long or int)
+        val vlcPosLong = resultData.getLongExtra("extra_position", -1L).takeIf { it >= 0 }
+        val vlcPosInt = resultData.getIntExtra("extra_position", -1).takeIf { it >= 0 }?.toLong()
+
+        // 3. Generic extras
+        val genericPos = resultData.getLongExtra("position", -1L).takeIf { it >= 0 }
+        val timePos = resultData.getLongExtra("time", -1L).takeIf { it >= 0 }
+        val playbackPos = resultData.getLongExtra("playback_position", -1L).takeIf { it >= 0 }
+
+        val resolvedPos = mxPos ?: vlcPosLong ?: vlcPosInt ?: genericPos ?: timePos ?: playbackPos
+
+        if (resolvedPos != null) {
+            val completed = duration != null && duration > 0 && resolvedPos >= (duration * 0.90f).toLong()
+            return ExternalPlaybackResult(
+                positionMs = resolvedPos,
+                durationMs = duration,
+                isCompleted = completed
+            )
+        }
+
+        return null
     }
 
     /**
      * Extracts playback position in milliseconds from player activity results (MX Player, VLC, etc.)
      */
     fun extractPositionFromResult(resultData: Intent?): Long? {
-        if (resultData == null) return null
-
-        // 1. MX Player ("position" in ms as int)
-        val mxPos = resultData.getIntExtra("position", -1)
-        if (mxPos > 0) return mxPos.toLong()
-
-        // 2. VLC ("extra_position" in ms as long or int)
-        val vlcPosLong = resultData.getLongExtra("extra_position", -1L)
-        if (vlcPosLong > 0) return vlcPosLong
-        val vlcPosInt = resultData.getIntExtra("extra_position", -1)
-        if (vlcPosInt > 0) return vlcPosInt.toLong()
-
-        // 3. Generic extras
-        val timePos = resultData.getLongExtra("time", -1L)
-        if (timePos > 0) return timePos
-
-        return null
+        return extractPlaybackResult(resultData)?.positionMs
     }
 
     /**
@@ -209,8 +248,10 @@ object ExternalPlayerHelper {
         val pm = context.packageManager
         val forResult = launcher != null
 
-        // Priority 1: Direct launch of popular dedicated media players (VLC, MX Player, MPV)
-        val preferredPackages = listOf(
+        // Priority 1: Direct launch of dedicated media players (Kyoto Player prioritized, VLC, MX Player, MPV)
+        val kyotoPkg = findKyotoPackage(context)
+        val preferredPackages = listOfNotNull(
+            kyotoPkg,
             "org.videolan.vlc",
             "com.mxtech.videoplayer.ad",
             "com.mxtech.videoplayer.pro",
